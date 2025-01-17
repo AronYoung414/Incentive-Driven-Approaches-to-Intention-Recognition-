@@ -22,11 +22,15 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class InitialOpacityPolicyGradient:
-    def __init__(self, hmm, ex_num, iter_num=1000, batch_size=1, V=100, T=10, eta=1, kappa=0.1, epsilon=0):
-        if not isinstance(hmm, HiddenMarkovModelP2):
-            raise TypeError("Expected hmm to be an instance of HiddenMarkovModelP2.")
+    def __init__(self, hmm_list, ex_num, iter_num=1000, batch_size=1, V=100, T=10, eta=1, kappa=0.1, epsilon=0):
+        for hmm in hmm_list:
+            if not isinstance(hmm, HiddenMarkovModelP2):
+                raise TypeError("Expected hmm to be an instance of HiddenMarkovModelP2.")
 
-        self.hmm = hmm  # Hidden markov model of P2.
+        self.num_of_types = len(hmm_list)
+        self.prior = np.ones(self.num_of_types) / self.num_of_types
+        self.prior = torch.from_numpy(self.prior).type(dtype=torch.float32)
+        self.hmm_list = hmm_list  # Hidden markov model of type 1.
         self.iter_num = iter_num  # number of iterations for gradient ascent
         self.ex_num = ex_num
         self.V = V  # number of sampled trajectories.
@@ -36,68 +40,92 @@ class InitialOpacityPolicyGradient:
         self.kappa = kappa  # step size for lambda.
         self.epsilon = epsilon  # value threshold.
 
-        self.num_of_aug_states = len(self.hmm.augmented_states)
-        self.num_of_actions = len(self.hmm.actions)
+        self.num_of_states = len(self.hmm_list[0].states)
+        self.num_of_actions = len(self.hmm_list[0].actions)
 
         # Initialize the masking policy parameters. self.theta = np.random.random([len(self.hmm.augmented_states),
         # len(self.hmm.masking_acts)])
 
         # Defining theta in pyTorch ways.
-        self.theta_torch = torch.nn.Parameter(
-            torch.randn(self.num_of_aug_states, self.num_of_actions, dtype=torch.float32, device=device,
-                        requires_grad=True))
+        self.theta_torch_list = []
+        # Define transition matrix for each type
+        self.transition_mat_torch_list = []
+        # Define initial distribution for each type
+        self.mu_0_torch_list = []
+        # Format: [observation_indx, aug_state_indx] = probability
+        self.B_torch_list = []
+        # Construct the cost matrix -> Format: [state_indx, masking_act] = cost
+        self.value_matrix_list = []
+        # Construct the transition matrix for each type
+        self.T_theta_list = []
+        for type_num in range(self.num_of_types):
+            hmm = hmm_list[type_num]
+            # Construct theta in pyTorch ways.
+            self.theta_torch_list.append(torch.from_numpy(hmm.optimal_theta).type(dtype=torch.float32))
+            # Construct transition matrix for each type
+            self.transition_mat_torch_list.append(torch.from_numpy(hmm.transition_mat).type(dtype=torch.float32))
+            self.transition_mat_torch_list[type_num] = self.transition_mat_torch_list[type_num].to(device)
+            # Construct initial distribution for each type
+            self.mu_0_torch_list.append(torch.from_numpy(hmm.mu_0).type(dtype=torch.float32))
+            self.mu_0_torch_list[type_num] = self.mu_0_torch_list[type_num].to(device)
+            self.T_theta_list.append(self.construct_transition_matrix_T_theta_torch(type_num))
+            # Construct observation matrices
+            self.B_torch_list.append(self.construct_B_matrix_torch(type_num))
+            # Construct reward matrices
+            self.value_matrix_list.append(self.construct_value_matrix(type_num))
+        # # Define transition matrix for type 2
+        # self.transition_mat_torch_2 = torch.from_numpy(self.hmm_2.transition_mat).type(dtype=torch.float32)
+        # self.transition_mat_torch_2 = self.transition_mat_torch_2.to(device)
+        # Define initial distribution for type 1
 
-        self.transition_mat_torch = torch.from_numpy(self.hmm.transition_mat).type(dtype=torch.float32)
-        self.transition_mat_torch = self.transition_mat_torch.to(device)
-
-        self.mu_0_torch = torch.from_numpy(self.hmm.mu_0).type(dtype=torch.float32)
-        self.mu_0_torch = self.mu_0_torch.to(device)
+        # # Define initial distribution for type 2
+        # self.mu_0_torch_2 = torch.from_numpy(self.hmm_2.mu_0).type(dtype=torch.float32)
+        # self.mu_0_torch_2 = self.mu_0_torch_2.to(device)
 
         # Initialize the Lagrangian multiplier.
         # self.lambda_mul = np.random.uniform(0, 1)
-        self.lambda_mul = torch.rand(1, device=device)
+        # self.lambda_mul = torch.rand(1, device=device)
         # Lists for entropy and threshold.
         self.entropy_list = list([])
         self.threshold_list = list([])
         self.iteration_list = list([])
 
         # Format: [observation_indx, aug_state_indx] = probability
-        self.B_torch = torch.zeros(len(self.hmm.observations), len(self.hmm.augmented_states), device=device)
+        # self.B_torch_1 = self.construct_B_matrix_torch(self.hmm_1)
+        # self.B_torch_2 = self.construct_B_matrix_torch(self.hmm_2)
         # self.B_torch = self.B_torch.to(device)
-        self.construct_B_matrix_torch()
 
         # Construct the cost matrix -> Format: [state_indx, masking_act] = cost ## TODO: Change the cost matrix to value matrix.
-        self.value_matrix = torch.zeros(len(self.hmm.augmented_states), len(self.hmm.actions), device=device)
-        self.construct_value_matrix()
+        # self.value_matrix_1 = self.construct_value_matrix(hmm_1)
+        # self.value_matrix_2 = self.construct_value_matrix(hmm_2)
 
-    def construct_value_matrix(self):
-        for s in self.hmm.value_dict:
-            for a in self.hmm.value_dict[s]:
-                self.value_matrix[s, a] = self.hmm.value_dict[s][a]
-        return
+    def construct_value_matrix(self, type_num):
+        hmm = self.hmm_list[type_num]
+        value_matrix = torch.zeros(len(hmm.states), len(hmm.actions), device=device)
+        for s in hmm.value_dict:
+            for a in hmm.value_dict[s]:
+                value_matrix[s, a] = hmm.value_dict[s][a]
+        return value_matrix
 
-    def sample_action_torch(self, state):
+    def sample_action_torch(self, state, type_num):
+        hmm = self.hmm_list[type_num]
+        theta = self.theta_torch_list[type_num]
         # sample's actions given state and theta, following softmax policy.
-        state_indx = self.hmm.augmented_states_indx_dict[state]
+        state_indx = hmm.states_indx_dict[state]
         # extract logits corresponding to the given state.
-        logits = self.theta_torch[state_indx]
+        logits = theta[state_indx]
         logits = logits - logits.max()  # logit regularization.
-
-        # if torch.isnan(logits).any() or torch.isinf(logits).any():
-        #     print("The logits are:", logits, "for", state_indx)
-        #     print("The state is: ", self.hmm.augmented_states[state_indx])
-        #     raise ValueError("Logits contain Nan or inf values.")
 
         # compute the softmax probabilities for the actions.
         action_probs = F.softmax(logits, dim=0)
 
         # sample an action based on the computed probabilities.
         action = torch.multinomial(action_probs, num_samples=1).item()
-
         return action
 
-    def sample_trajectories(self):
-
+    def sample_trajectories(self, type_num):
+        hmm = self.hmm_list[type_num]
+        theta = self.theta_torch_list[type_num]
         state_data = np.zeros([self.batch_size, self.T], dtype=np.int32)
         action_data = np.zeros([self.batch_size, self.T], dtype=np.int32)
         y_obs_data = []
@@ -108,18 +136,18 @@ class InitialOpacityPolicyGradient:
             # state = self.hmm.initial_state
 
             # starting from the initial state. Choose an initial state from a set of initial states.
-            state = random.choice(list(self.hmm.initial_states))
+            state = random.choice(list(hmm.initial_states))
 
             # # observation for the initial state. y.append(self.hmm.sample_observation(state))
 
-            act = self.sample_action_torch(state)
+            act = self.sample_action_torch(state, type_num)
             for t in range(self.T):
                 # Obtain the observation and add it to observation data.
                 # y.append(self.hmm.sample_observation(state))
                 # Use the above when 'Null' and 'NO' are the same. Else use the following.
-                y.append(self.hmm.sample_observation_same_NO_Null(state))
+                y.append(hmm.sample_observation_same_NO_Null(state))
                 # Add the corresponding state and action values to state_data and action_data.
-                s = self.hmm.augmented_states_indx_dict[state]
+                s = hmm.states_indx_dict[state]
                 state_data[v, t] = s
                 # a = self.hmm.mask_act_indx_dict[act]
                 # action_data[v, t] = a
@@ -127,50 +155,55 @@ class InitialOpacityPolicyGradient:
                 # Use the below with self.sample_action_torch as it directly outputs the index.
                 action_data[v, t] = act
                 # next state sampling given the state and action.
-                state = self.hmm.sample_next_state(state, act)
+                state = hmm.sample_next_state(state, act)
                 # # Obtain the observation.
                 # y.append(self.hmm.sample_observation(state))
                 # next action sampling given the new state.
-                act = self.sample_action_torch(state)
+                act = self.sample_action_torch(state, type_num)
             y_obs_data.append(y)
         return state_data, action_data, y_obs_data
 
-    def construct_transition_matrix_T_theta_torch(self):
+    def construct_transition_matrix_T_theta_torch(self, type_num):
+        transition_mat_torch = self.transition_mat_torch_list[type_num]
+        theta_torch = self.theta_torch_list[type_num]
         # Constructing the transtion matrix given the policy pi_\theta.
         # That T_\theta where P_\theta(p, q) = \sum_{\sigma' \in \Sigma} P(q|p, \sigma').pi_\theta(\sigma'|p).
         # T_\theta(i, j) --> from j to i.
 
         # Apply softmax to logits to obtain the policy probabilities pi_theta.
-        logits = self.theta_torch.clone()
+        logits = theta_torch.clone()
         logits = logits - logits.max()  # logits regularization.
 
         pi_theta = F.softmax(logits, dim=1)
 
         # Multiplication and sum over actions for each element of T_theta.
-        T_theta = torch.einsum('sa, sna->ns', pi_theta, self.transition_mat_torch)
+        T_theta = torch.einsum('sa, sna->ns', pi_theta, transition_mat_torch)
 
         # # Compute T_theta manually for comparison.
         # T_theta_compare = self.T_theta_for_comparison(pi_theta)
-
         return T_theta
 
-    def construct_B_matrix_torch(self):
+    def construct_B_matrix_torch(self, type_num):
+        hmm = self.hmm_list[type_num]
         # Populate the B matrix with emission probabilities.
         # B(i\mid j) = Obs_2(o=i|z_j).
         # Format-- [observation_indx, aug_state_indx] = probability
+        B_torch = torch.zeros(len(hmm.observations), len(hmm.states), device=device)
+        for state, obs in itertools.product(hmm.states, hmm.observations):
+            B_torch[hmm.observations_indx_dict[obs], hmm.states_indx_dict[state]] = \
+                hmm.emission_prob[state][obs]
+        return B_torch
 
-        for state, obs in itertools.product(self.hmm.augmented_states, self.hmm.observations):
-            self.B_torch[self.hmm.observations_indx_dict[obs], self.hmm.augmented_states_indx_dict[state]] = \
-                self.hmm.emission_prob[state][obs]
-        return
-
-    def construct_A_matrix_torch(self, T_theta, o_t):
+    def construct_A_matrix_torch(self, type_num, o_t):
+        hmm = self.hmm_list[type_num]
+        B_torch = self.B_torch_list[type_num]
+        T_theta = self.T_theta_list[type_num]
         # Construct the A matrix. A^\theta_{o_t} = T_theta.diag(B_{o_t, 1},...., B_{o_t, N}).
         # o_t is the particular observation.
         # TODO: see if you can save computation by not repeating the computations of A_o_t by saving them!!!!!!!!!!!!!!!
 
-        o_t_index = self.hmm.observations_indx_dict[o_t]
-        B_diag = torch.diag(self.B_torch[o_t_index, :])
+        o_t_index = hmm.observations_indx_dict[o_t]
+        B_diag = torch.diag(B_torch[o_t_index, :])
 
         # Compute A^\theta_{o_t}.
         # A_o_t = torch.matmul(T_theta, B_diag)
@@ -178,30 +211,33 @@ class InitialOpacityPolicyGradient:
         # return A_o_t
         return T_theta @ B_diag
 
-    def compute_A_matrices(self, T_theta, y_v):
+    def compute_A_matrices(self, type_num, y_v):
+        hmm = self.hmm_list[type_num]
+        B_torch = self.B_torch_list[type_num]
+        T_theta = self.T_theta_list[type_num]
         # Construct all of the A_o_t.
         # Outputs a list of all of the A matrices given an observation sequence.
         A_matrices = []  # sequece -> Ao1, Ao2, ..., AoT.
         for o_t in y_v:
-            A_o_t = self.construct_A_matrix_torch(T_theta, o_t)
+            A_o_t = self.construct_A_matrix_torch(type_num, o_t)
             A_matrices.append(A_o_t)
 
         return A_matrices
 
-    def compute_probability_of_observations(self, A_matrices, s_0):
-        # Computes P_\theta(y) = P(o_{1:T}) = 1^T.A^\theta_{o_{T:1}}.\mu_0, P_\theta(y|s_0) = 1^T.A^\theta_{o_{T:1}}.1_s0
+    def compute_probability_of_observations_given_type(self, type_num, A_matrices):
+        # Computes P_\theta(y|T) = P(o_{1:T}) = 1^T.A^\theta_{o_{T:1}}.\mu_{0,T}
         # Also computes A^\theta_{o_{T-1:1}}.\mu_0 -->  Required in later calculations.
 
         # A_matrices is a list of A matrices computed given T_theta and a sequence of observations.
 
-        # Define one hot vector
-        one_hot_vec = np.zeros(len(self.hmm.augmented_states))  # The vector 1_s0
-        one_hot_vec[s_0] = 1
-        one_hot_vec = torch.from_numpy(one_hot_vec).type(dtype=torch.float32)
-        one_hot_vec = one_hot_vec.to(device)
+        # # Define one hot vector
+        # one_hot_vec = np.zeros(len(hmm.states))  # The vector 1_s0
+        # one_hot_vec[s_0] = 1
+        # one_hot_vec = torch.from_numpy(one_hot_vec).type(dtype=torch.float32)
+        # one_hot_vec = one_hot_vec.to(device)
 
-        result_prob = self.mu_0_torch  # For P_\theta(y) = P(o_{1:T}) = 1^T.A^\theta_{o_{T:1}}.\mu_0
-        p_y_s0 = one_hot_vec  # For P_\theta(y|s_0) = 1^T.A^\theta_{o_{T:1}}.1_s0
+        result_prob = self.mu_0_torch_list[type_num]  # For P_\theta(y) = P(o_{1:T}) = 1^T.A^\theta_{o_{T:1}}.\mu_0
+        # p_y_s0 = one_hot_vec  # For P_\theta(y|s_0) = 1^T.A^\theta_{o_{T:1}}.1_s0
         # resultant_matrix = self.mu_0_torch  # For A^\theta_{o_{T-1:1}}.\mu_0 -->  Required in later calculations.
 
         # Define a counter to stop the multiplication at T-1 for one of the results and T for the other.
@@ -209,21 +245,21 @@ class InitialOpacityPolicyGradient:
         # sequentially multiply with A matrices.
         for A in A_matrices:
             result_prob = torch.matmul(A, result_prob)
-            p_y_s0 = torch.matmul(A, p_y_s0)
+            # p_y_s0 = torch.matmul(A, p_y_s0)
 
         # Multiplying with 1^T is nothing but summing up. Hence, we do the following.
-        result_prob_P_y = result_prob.sum()
-        result_prob_P_y_s0 = p_y_s0.sum()
+        result_prob_P_y_g_T = result_prob.sum()
+        # result_prob_P_y_s0 = p_y_s0.sum()
 
         # resultant_matrix_prob_y_one_less = resultant_matrix.sum()
         # Compute the gradient later by simply using result_prob_to_return.backward() --> This uses autograd to
         # compute gradient.
 
-        result_prob_P_y.backward(retain_graph=True)  # Gradient of P_\theta(y).
-        gradient_P_y = self.theta_torch.grad.clone()
+        result_prob_P_y_g_T.backward(retain_graph=True)  # Gradient of P_\theta(y).
+        gradient_P_y_g_T = self.theta_torch.grad.clone()
 
-        result_prob_P_y_s0.backward(retain_graph=True)  # Gradient of P_\theta(y|s0).
-        gradient_P_y_s0 = self.theta_torch.grad.clone()
+        # result_prob_P_y_s0.backward(retain_graph=True)  # Gradient of P_\theta(y|s0).
+        # gradient_P_y_s0 = self.theta_torch.grad.clone()
 
         # resultant_matrix_prob_y_one_less.backward(retain_graph=True)  # Gradient of P_\theta(O_{1:T-1}).
         # gradient_P_y_one_less = self.theta_torch.grad.clone()
@@ -231,57 +267,73 @@ class InitialOpacityPolicyGradient:
         # clearing .grad for the next gradient computation.
         self.theta_torch.grad.zero_()
 
-        return result_prob_P_y, gradient_P_y, result_prob_P_y_s0, gradient_P_y_s0
+        return result_prob_P_y_g_T, gradient_P_y_g_T
         # return resultant_matrix_prob_y_one_less, resultant_matrix, gradient_P_y_one_less
 
-    def P_S0_g_Y(self, A_matrices, s_0):
+    def compute_probability_of_observations(self, A_matrices_list):
+        """
+        A_matrices_list: The list of A matrix for each type of agents
+        """
+        result_prob_P_y = 0
+        gradient_P_y = torch.zeros([self.num_of_states, self.num_of_actions],
+                              device=device)
+        for i in range(self.num_of_types):
+            result_prob_P_y_g_T, gradient_P_y_g_T = self.compute_probability_of_observations_given_type(self.mu_0_torch_list[i], A_matrices_list[i])
+            result_prob_P_y = result_prob_P_y + result_prob_P_y_g_T * self.prior[i]
+            gradient_P_y = gradient_P_y_g_T + self.prior[i] * gradient_P_y_g_T
+        return result_prob_P_y, gradient_P_y
+
+    def P_T_g_Y(self, type_num, A_matrices_list):
         # Computes P_\theta(s_0|y) = P_\theta(y|s_0) \mu_0(s_0) / P_\theta(y)
-        prob_P_y, gradient_P_y, prob_P_y_s0, gradient_P_y_s0 = self.compute_probability_of_observations(A_matrices, s_0)
-        P_s0_y = prob_P_y_s0 * self.mu_0_torch[s_0] / prob_P_y
-        gradient_P_s0_y = ((self.mu_0_torch[s_0] / prob_P_y) * gradient_P_y_s0 -
-                           (self.mu_0_torch[s_0] * prob_P_y_s0 / prob_P_y ** 2) * gradient_P_y)
-        return P_s0_y, gradient_P_s0_y, prob_P_y, gradient_P_y
+        prob_P_y_T, gradient_P_y_T = self.compute_probability_of_observations_given_type(type_num, A_matrices_list[type_num])
+        prob_P_y, gradient_P_y = self.compute_probability_of_observations_given_type(type_num, A_matrices_list)
+        P_T_y = prob_P_y_T * self.prior[type_num] / prob_P_y
+        gradient_P_T_y = ((self.prior[type_num] / prob_P_y) * gradient_P_y_T -
+                           (self.prior[type_num] * prob_P_y_T / prob_P_y ** 2) * gradient_P_y)
+        return P_T_y, gradient_P_T_y, prob_P_y, gradient_P_y
         # return resultant_matrix_prob_y_one_less, resultant_matrix, gradient_P_y_one_less
 
-    def approximate_conditional_entropy_and_gradient_S0_given_Y(self, T_theta, y_obs_data):
+    def approximate_conditional_entropy_and_gradient_S0_given_Y(self, y_obs_data):
         # Computes the conditional entropy H(S_0 | Y; \theta); AND the gradient of conditional entropy \nabla_theta
         # H(S_0|Y; \theta).
 
         H = torch.tensor(0, dtype=torch.float32, device=device)
-        nabla_H = torch.zeros([self.num_of_aug_states, self.num_of_actions],
+        nabla_H = torch.zeros([self.num_of_states, self.num_of_actions, self.num_of_types],
                               device=device)
 
         for v in range(self.batch_size):
             y_v = y_obs_data[v]
 
-            # construct the A matrices.
-            A_matrices = self.compute_A_matrices(T_theta, y_v)  # Compute for each y_v.
+            A_matrices_list = []
+            for type_num in range(self.num_of_types):
+                # construct the A matrices.
+                A_matrices_list.append(self.compute_A_matrices(self.T_theta_list[type_num], y_v))  # Compute for each y_v.
 
-            for s_0 in self.hmm.initial_states:
+            for type_num in range(self.num_of_types):
                 # values for the term w_T = 1.
-                P_s0_y, gradient_P_s0_y, result_P_y, gradient_P_y = self.P_S0_g_Y(A_matrices, s_0)
+                P_T_y, gradient_P_T_y, result_P_y, gradient_P_y = self.P_T_g_Y(type_num, A_matrices_list)
 
                 # to prevent numerical issues, clamp the values of p_theta_w_t_g_yv_1 between 0 and 1.
-                P_s0_y = torch.clamp(P_s0_y, min=0.0, max=1.0)
+                P_T_y = torch.clamp(P_T_y, min=0.0, max=1.0)
 
-                if P_s0_y != 0:
-                    log2_P_s0_y = torch.log2(P_s0_y)
+                if P_T_y != 0:
+                    log2_P_T_y = torch.log2(P_T_y)
                 else:
-                    log2_P_s0_y = torch.zeros_like(P_s0_y, device=device)
+                    log2_P_T_y = torch.zeros_like(P_T_y, device=device)
 
                 # Calculate the term P_\theta(s_0|y) * \log P_\theta(s_0|y).
-                term_p_logp = P_s0_y * log2_P_s0_y
+                term_p_logp = P_T_y * log2_P_T_y
 
                 # Computing the gradient for w_T = 1. term for gradient term w_T = 1. Computed as [log_2 P_\theta(
                 # w_T|y_v) \nabla_\theta P_\theta(w_T|y_v) + P_\theta(w_T|y_v) log_2 P_\theta(w_T|y_v) (\nabla_\theta
                 # P_\theta(y))/P_\theta(y) + (\nabla_\theta P_\theta(w_T|y_v))/log2]
-                gradient_term = (log2_P_s0_y * gradient_P_s0_y) + (
-                        P_s0_y * log2_P_s0_y * gradient_P_y / result_P_y) + (
-                                        gradient_P_s0_y / 0.301029995664)  # 0.301029995664 = log2
+                gradient_term = (log2_P_T_y * gradient_P_T_y) + (
+                        P_T_y * log2_P_T_y * gradient_P_y / result_P_y) + (
+                                        gradient_P_T_y / 0.301029995664)  # 0.301029995664 = log2
 
                 H = H + term_p_logp
 
-                nabla_H = nabla_H + gradient_term
+                nabla_H[:, :, type_num] = nabla_H[:, :, type_num] + gradient_term
 
         H = H / self.batch_size
         # H.backward()
@@ -290,76 +342,76 @@ class InitialOpacityPolicyGradient:
 
         return -H, -nabla_H
 
-    def log_policy_gradient(self, state, act):
-
-        logits_2 = self.theta_torch - self.theta_torch.max(dim=1, keepdim=True).values
-        action_indx = self.hmm.actions_indx_dict[act]
-
-        actions_probs_2 = F.softmax(logits_2, dim=1)
-        # actions_probs_2_prime = actions_probs_2[:, action_indx]
-        # actions_probs_2_prime = actions_probs_2
-
-        state_indicators = (torch.arange(self.num_of_aug_states, device=device) == state).float()
-        # action_indicators = (torch.arange(len(self.hmm.masking_acts), device=device) == act).float()
-        action_indicators = torch.zeros_like(self.theta_torch, dtype=torch.float32, device=device)
-        action_indicators[:, action_indx] = 1.0
-
-        # action_difference = action_indicators - actions_probs_2_prime[:, None]
-        action_difference = action_indicators - actions_probs_2
-
-        # partial_pi_theta_2 = state_indicators[:, None] * action_difference
-        gradient_2 = state_indicators[:, None] * action_difference
-
-        # gradient_2 = partial_pi_theta_2
-
-        return gradient_2
-
-    def nabla_value_function(self, state_data, action_data, gamma=1):
-
-        state_data = torch.tensor(state_data, dtype=torch.long, device=device)
-        action_data = torch.tensor(action_data, dtype=torch.long, device=device)
-
-        # state_indicators_2 = F.one_hot(state_data, num_classes=len(
-        #     self.hmm.augmented_states)).float()  # shape: (num_trajectories, trajectory_length, num_states)
-        # action_indicators_2 = F.one_hot(action_data, num_classes=len(
-        #     self.hmm.masking_acts)).float()  # shape: (num_trajectories, trajectory_length, num_actions)
-
-        state_indicators_2 = F.one_hot(state_data, num_classes=self.num_of_aug_states).float()  # shape: (
-        # num_trajectories, trajectory_length, num_states)
-        action_indicators_2 = F.one_hot(action_data, num_classes=self.num_of_actions).float()  # shape: (
-        # num_trajectories, trajectory_length, num_actions)
-
-        # Vectorized log_policy_gradient for the entire batch (num_trajectories, trajectory_length, num_states,
-        # num_actions)
-        logits_2 = self.theta_torch.unsqueeze(0).unsqueeze(0)  # Broadcast to (1, 1, num_states, num_actions)
-        logits_2 = logits_2 - logits_2.max(dim=-1, keepdim=True)[0]  # For numerical stability in softmax
-        actions_probs_2 = F.softmax(logits_2, dim=-1)  # (1, 1, num_states, num_actions)
-
-        # Subtract action probabilities from action indicators (element-wise for all states and actions)
-        partial_pi_theta_2 = state_indicators_2.unsqueeze(-1) * (action_indicators_2.unsqueeze(
-            -2) - actions_probs_2)  # shape: (num_trajectories, trajectory_length, num_states, num_actions)
-
-        # Sum over the time axis to accumulate log_policy_gradient for each trajectory (num_trajectories, num_states,
-        # num_actions)
-        log_policy_gradient_2 = partial_pi_theta_2.sum(dim=1)  # Summing over the trajectory length (time steps)
-
-        # Compute the discounted return for each trajectory
-        costs_2 = torch.tensor([[self.value_matrix[s, a] for s, a in zip(state_data[i], action_data[i])] for i in
-                                range(self.batch_size)],
-                               dtype=torch.float32, device=device)  # shape: (num_trajectories, trajectory_length)
-        discounted_returns_2 = torch.sum(costs_2, dim=1)  # shape: (num_trajectories,)
-
-        # Reshape discounted returns for broadcasting in the final gradient computation
-        discounted_returns_2 = discounted_returns_2.view(-1, 1, 1)  # shape: (num_trajectories, 1, 1)
-
-        # Compute the value function gradient by multiplying discounted returns with log_policy_gradient
-        value_function_gradient_2 = (discounted_returns_2 * log_policy_gradient_2).sum(dim=0) / self.batch_size
-        # Averaging over trajectories
-
-        # Compute the average value function over all trajectories
-        value_function_2 = discounted_returns_2.mean().item()
-
-        return value_function_gradient_2, value_function_2
+    # def log_policy_gradient(self, state, act):
+    #
+    #     logits_2 = self.theta_torch - self.theta_torch.max(dim=1, keepdim=True).values
+    #     action_indx = self.hmm.actions_indx_dict[act]
+    #
+    #     actions_probs_2 = F.softmax(logits_2, dim=1)
+    #     # actions_probs_2_prime = actions_probs_2[:, action_indx]
+    #     # actions_probs_2_prime = actions_probs_2
+    #
+    #     state_indicators = (torch.arange(self.num_of_states, device=device) == state).float()
+    #     # action_indicators = (torch.arange(len(self.hmm.masking_acts), device=device) == act).float()
+    #     action_indicators = torch.zeros_like(self.theta_torch, dtype=torch.float32, device=device)
+    #     action_indicators[:, action_indx] = 1.0
+    #
+    #     # action_difference = action_indicators - actions_probs_2_prime[:, None]
+    #     action_difference = action_indicators - actions_probs_2
+    #
+    #     # partial_pi_theta_2 = state_indicators[:, None] * action_difference
+    #     gradient_2 = state_indicators[:, None] * action_difference
+    #
+    #     # gradient_2 = partial_pi_theta_2
+    #
+    #     return gradient_2
+    #
+    # def nabla_value_function(self, state_data, action_data, gamma=1):
+    #
+    #     state_data = torch.tensor(state_data, dtype=torch.long, device=device)
+    #     action_data = torch.tensor(action_data, dtype=torch.long, device=device)
+    #
+    #     # state_indicators_2 = F.one_hot(state_data, num_classes=len(
+    #     #     self.hmm.augmented_states)).float()  # shape: (num_trajectories, trajectory_length, num_states)
+    #     # action_indicators_2 = F.one_hot(action_data, num_classes=len(
+    #     #     self.hmm.masking_acts)).float()  # shape: (num_trajectories, trajectory_length, num_actions)
+    #
+    #     state_indicators_2 = F.one_hot(state_data, num_classes=self.num_of_states).float()  # shape: (
+    #     # num_trajectories, trajectory_length, num_states)
+    #     action_indicators_2 = F.one_hot(action_data, num_classes=self.num_of_actions).float()  # shape: (
+    #     # num_trajectories, trajectory_length, num_actions)
+    #
+    #     # Vectorized log_policy_gradient for the entire batch (num_trajectories, trajectory_length, num_states,
+    #     # num_actions)
+    #     logits_2 = self.theta_torch.unsqueeze(0).unsqueeze(0)  # Broadcast to (1, 1, num_states, num_actions)
+    #     logits_2 = logits_2 - logits_2.max(dim=-1, keepdim=True)[0]  # For numerical stability in softmax
+    #     actions_probs_2 = F.softmax(logits_2, dim=-1)  # (1, 1, num_states, num_actions)
+    #
+    #     # Subtract action probabilities from action indicators (element-wise for all states and actions)
+    #     partial_pi_theta_2 = state_indicators_2.unsqueeze(-1) * (action_indicators_2.unsqueeze(
+    #         -2) - actions_probs_2)  # shape: (num_trajectories, trajectory_length, num_states, num_actions)
+    #
+    #     # Sum over the time axis to accumulate log_policy_gradient for each trajectory (num_trajectories, num_states,
+    #     # num_actions)
+    #     log_policy_gradient_2 = partial_pi_theta_2.sum(dim=1)  # Summing over the trajectory length (time steps)
+    #
+    #     # Compute the discounted return for each trajectory
+    #     costs_2 = torch.tensor([[self.value_matrix[s, a] for s, a in zip(state_data[i], action_data[i])] for i in
+    #                             range(self.batch_size)],
+    #                            dtype=torch.float32, device=device)  # shape: (num_trajectories, trajectory_length)
+    #     discounted_returns_2 = torch.sum(costs_2, dim=1)  # shape: (num_trajectories,)
+    #
+    #     # Reshape discounted returns for broadcasting in the final gradient computation
+    #     discounted_returns_2 = discounted_returns_2.view(-1, 1, 1)  # shape: (num_trajectories, 1, 1)
+    #
+    #     # Compute the value function gradient by multiplying discounted returns with log_policy_gradient
+    #     value_function_gradient_2 = (discounted_returns_2 * log_policy_gradient_2).sum(dim=0) / self.batch_size
+    #     # Averaging over trajectories
+    #
+    #     # Compute the average value function over all trajectories
+    #     value_function_2 = discounted_returns_2.mean().item()
+    #
+    #     return value_function_gradient_2, value_function_2
 
     def solver(self):
         # Solve using policy gradient for initial-state opacity enforcement.
@@ -452,8 +504,8 @@ class InitialOpacityPolicyGradient:
         theta = self.theta_torch.detach().cpu()
         # Compute softmax policy.
         policies = {}
-        for aug_state in self.hmm.augmented_states:
-            state_actions = theta[self.hmm.augmented_states_indx_dict[aug_state]]
+        for aug_state in self.hmm.states:
+            state_actions = theta[self.hmm.states_indx_dict[aug_state]]
             policy = torch.softmax(state_actions, dim=0)
             policies[aug_state] = policy.tolist()
 

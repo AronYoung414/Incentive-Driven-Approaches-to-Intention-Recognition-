@@ -36,7 +36,7 @@ class PrimalDualPolicyGradientTest:
         self.kappa = kappa  # step size for lambda.
         self.epsilon = epsilon  # value threshold.
 
-        self.num_of_aug_states = len(self.hmm.augmented_states)
+        self.num_of_aug_states = len(self.hmm.states)
         self.num_of_actions = len(self.hmm.actions)
 
         # Initialize the masking policy parameters. self.theta = np.random.random([len(self.hmm.augmented_states),
@@ -62,12 +62,12 @@ class PrimalDualPolicyGradientTest:
         self.iteration_list = list([])
 
         # Format: [observation_indx, aug_state_indx] = probability
-        self.B_torch = torch.zeros(len(self.hmm.observations), len(self.hmm.augmented_states), device=device)
+        self.B_torch = torch.zeros(len(self.hmm.observations), len(self.hmm.states), device=device)
         # self.B_torch = self.B_torch.to(device)
         self.construct_B_matrix_torch()
 
         # Construct the cost matrix -> Format: [state_indx, masking_act] = cost ## TODO: Change the cost matrix to value matrix.
-        self.value_matrix = torch.zeros(len(self.hmm.augmented_states), len(self.hmm.actions), device=device)
+        self.value_matrix = torch.zeros(len(self.hmm.states), len(self.hmm.actions), device=device)
         self.construct_value_matrix()
 
     def construct_value_matrix(self):
@@ -78,7 +78,7 @@ class PrimalDualPolicyGradientTest:
 
     def sample_action_torch(self, state):
         # sample's actions given state and theta, following softmax policy.
-        state_indx = self.hmm.augmented_states_indx_dict[state]
+        state_indx = self.hmm.states_indx_dict[state]
         # extract logits corresponding to the given state.
         logits = self.theta_torch[state_indx]
         logits = logits - logits.max()  # logit regularization.
@@ -119,7 +119,7 @@ class PrimalDualPolicyGradientTest:
                 # Use the above when 'Null' and 'NO' are the same. Else use the following.
                 y.append(self.hmm.sample_observation_same_NO_Null(state))
                 # Add the corresponding state and action values to state_data and action_data.
-                s = self.hmm.augmented_states_indx_dict[state]
+                s = self.hmm.states_indx_dict[state]
                 state_data[v, t] = s
                 # a = self.hmm.mask_act_indx_dict[act]
                 # action_data[v, t] = a
@@ -159,8 +159,8 @@ class PrimalDualPolicyGradientTest:
         # B(i\mid j) = Obs_2(o=i|z_j).
         # Format-- [observation_indx, aug_state_indx] = probability
 
-        for state, obs in itertools.product(self.hmm.augmented_states, self.hmm.observations):
-            self.B_torch[self.hmm.observations_indx_dict[obs], self.hmm.augmented_states_indx_dict[state]] = \
+        for state, obs in itertools.product(self.hmm.states, self.hmm.observations):
+            self.B_torch[self.hmm.observations_indx_dict[obs], self.hmm.states_indx_dict[state]] = \
                 self.hmm.emission_prob[state][obs]
         return
 
@@ -237,7 +237,7 @@ class PrimalDualPolicyGradientTest:
         # Outputs: 1^T_g.A^\theta_{o_{T-1:1}}.\mu_0
 
         ones_g = torch.zeros(self.num_of_aug_states, device=device)
-        ones_g[self.hmm.augmented_states_indx_dict[g]] = 1
+        ones_g[self.hmm.states_indx_dict[g]] = 1
 
         # joint_dist_zT_and_obs_less_T = torch.matmul(ones_g, resultant_matrix)
 
@@ -254,7 +254,7 @@ class PrimalDualPolicyGradientTest:
 
         for g in self.hmm.secret_goal_states:
             # joint_dist_zT_and_obs_less_T = self.compute_joint_dist_of_zT_and_obs_less_than_T(resultant_matrix, g)
-            joint_dist_zT_and_obs_less_T = resultant_matrix[self.hmm.augmented_states_indx_dict[g]]
+            joint_dist_zT_and_obs_less_T = resultant_matrix[self.hmm.states_indx_dict[g]]
             if flag == 0:
                 result_P_W_g_Y = (self.hmm.emission_prob[g][o_T] * joint_dist_zT_and_obs_less_T) / result_P_y
                 flag = 1
@@ -511,8 +511,8 @@ class PrimalDualPolicyGradientTest:
         theta = self.theta_torch.detach().cpu()
         # Compute softmax policy.
         policies = {}
-        for aug_state in self.hmm.augmented_states:
-            state_actions = theta[self.hmm.augmented_states_indx_dict[aug_state]]
+        for aug_state in self.hmm.states:
+            state_actions = theta[self.hmm.states_indx_dict[aug_state]]
             policy = torch.softmax(state_actions, dim=0)
             policies[aug_state] = policy.tolist()
 

@@ -6,7 +6,7 @@ import random
 
 
 class HiddenMarkovModelP2:
-    def __init__(self, agent_mdp, sensors, state_obs2=dict([]), value_dict=dict([]), secret_goal_states=list([])):
+    def __init__(self, agent_mdp, sensors, side_payment, state_obs2=dict([]), value_dict=dict([]), secret_goal_states=list([])):
         if not isinstance(agent_mdp, MDP):
             raise TypeError("Expected agent_mdp to be an instance of MDP.")
 
@@ -15,16 +15,17 @@ class HiddenMarkovModelP2:
 
         self.agent_mdp = agent_mdp
         self.sensors = sensors
+        self.side_payment = side_payment
 
-        self.augmented_states = list()  # The augmented states space S x \Sigma # TODO: Check if this should be a set
-        self.augmented_states = self.agent_mdp.states
+        # self.augmented_states = list()  # The augmented states space S x \Sigma # TODO: Check if this should be a set
+        self.states = self.agent_mdp.states
         # instead? I have made it a list here to ensure that we can have a transition matrix defined appropriately.
         # self.get_augmented_states()
 
-        self.augmented_states_indx_dict = dict()
+        self.states_indx_dict = dict()
         indx_num = 0
-        for aug_st in self.augmented_states:
-            self.augmented_states_indx_dict[aug_st] = indx_num
+        for st in self.states:
+            self.states_indx_dict[st] = indx_num
             indx_num += 1
 
         self.actions = self.agent_mdp.actlist  # The actions of the agent MDP.
@@ -39,13 +40,23 @@ class HiddenMarkovModelP2:
         # self.transition_dict = defaultdict(
         #     lambda: defaultdict(dict))  # The transition dictionary for the augmented state-space.
 
+        # set the value dictionary.
+        self.value_dict_input = value_dict # The value dictionary for the augmented state-space i.e., only state dependednt.
+        self.value_dict = defaultdict(lambda: defaultdict(dict))  # The format is [aug_st_indx][mask_act_indx]=value.
+        self.get_value_dict()
+        for state in self.states:
+            s_idx = self.states_indx_dict[state]
+            for act in self.actions:
+                a_idx = self.actions_indx_dict[act]
+                self.value_dict[s_idx][a_idx] = self.value_dict[s_idx][a_idx] + self.side_payment[s_idx][a_idx]
+
         self.transition_dict = self.agent_mdp.trans
         # self.get_transition_dict()
 
         # self.transition_mat = {a: np.zeros((len(self.augmented_states), len(self.augmented_states))) for a in
         # self.masking_acts}
         self.transition_mat = np.zeros(
-            (len(self.augmented_states), len(self.augmented_states), len(self.agent_mdp.actlist)))
+            (len(self.states), len(self.states), len(self.agent_mdp.actlist)))
 
         self.get_transition_mat()
 
@@ -71,7 +82,7 @@ class HiddenMarkovModelP2:
 
         self.initial_dist = dict([])  # The initial distribution of the augmented state-space. initial_dist[augstate]=probability
         # initial distribution array.
-        self.mu_0 = np.zeros(len(self.augmented_states))
+        self.mu_0 = np.zeros(len(self.states))
 
         self.get_initial_dist()
 
@@ -83,54 +94,80 @@ class HiddenMarkovModelP2:
         self.initial_states = set()
         self.get_initial_states()
 
-        # set the value dictionary.
-        self.value_dict_input = value_dict # The value dictionary for the augmented state-space i.e., only state dependednt.
-        self.value_dict = defaultdict(lambda: defaultdict(dict))  # The format is [aug_st_indx][mask_act_indx]=value.
-        self.get_value_dict()
-
         self.secret_goal_states = secret_goal_states  # The secret goal states.
         # self.get_secret_goal_states(secret_goal_states)
+        self.optimal_theta = self.get_optimal_theta(self.get_policy_entropy(tau=0.05))[0]
 
     def get_value_dict(self):
         # Assign cost/reward/value.
-        for state in self.augmented_states:
+        for state in self.states:
             for act in self.actions:
-                self.value_dict[self.augmented_states_indx_dict[state]][self.actions_indx_dict[act]] = self.value_dict_input[state]
-
+                self.value_dict[self.states_indx_dict[state]][self.actions_indx_dict[act]] = self.value_dict_input[state]
         return
 
-    # def get_secret_goal_states(self, secret_goal_states):
-    #     # Construct a list of augmented secret states.
-    #     for state in self.augmented_states:
-    #         if state[0] in secret_goal_states:
-    #             self.secret_goal_states.append(state)
-    #     return
+    def getcore(self, V, st, act):
+            core = 0
+            for st_, pro in self.transition_dict[st][act].items():
+                if st_ != "Sink":
+                    core += pro * V[self.states.index(st_)]
+            return core
 
-    # def get_transition_dict(self): # The transition dict is the transition function such that transition_dict[
-    # state][mask][next_state]=probability. for state, mask in itertools.product(self.augmented_states,
-    # self.masking_acts): # TODO: Consider only the post states to populate the trans dict.
+    def get_policy_entropy(self, tau):
+        threshold = 0.0001
+        V = np.zeros(len(self.states))
+        V1 = V.copy()
+        policy = {}
+        Q = {}
+        for st in self.states:
+            policy[st] = {}
+            Q[st] = {}
+        itcount = 1
+        while (
+                itcount == 1
+                or np.inner(np.array(V) - np.array(V1), np.array(V) - np.array(V1))
+                > threshold
+        ):
+            V1 = V.copy()
+            for st in self.states:
+                Q_theta = []
+                for act in self.actions:
+                    core = (self.value_dict[self.states_indx_dict[st]][self.actions_indx_dict[act]]
+                            + self.agent_mdp.disc_factor * self.getcore(V1, st, act)) / tau
+                    # Q[st][act] = np.exp(core)
+                    Q_theta.append(core)
+                Q_sub = Q_theta - np.max(Q_theta)
+                p = np.exp(Q_sub) / np.exp(Q_sub).sum()
+                # Q_s = sum(Q[st].values())
+                # for act in self.actions:
+                # policy[st][act] = Q[st][act] / Q_s
+                for i in range(len(self.actions)):
+                    policy[st][self.actions[i]] = p[i]
+                V[self.states.index(st)] = tau * np.log(np.exp(Q_theta).sum())
+            itcount += 1
+        return V, policy
 
-    # def get_transition_dict(self):
-    #     # The transition_dict is the transition function such that transition_dict[state][mask][next_state]=probability.
-    #     for state, act, next_state in itertools.product(self.augmented_states, self.augmented_states):
-    #         if next_state[1] == mask:
-    #             self.transition_dict[state][mask][next_state] = self.get_transition_probability(state[0], next_state[
-    #                 0])
-    #         else:
-    #             self.transition_dict[state][mask][next_state] = 0.0
-    #     return
+    def get_optimal_theta(self, V):
+        q_table = np.zeros((len(self.states), len(self.actions)))
+        for state in self.states:
+            s_idx = self.states_indx_dict[state]
+            for act in self.actions:
+                a_idx = self.actions_indx_dict[act]
+                q_value = self.value_dict[s_idx][a_idx] + self.agent_mdp.disc_factor * sum(
+                    self.transition_dict[s_idx][act][s_next] * V[self.states_indx_dict[s_next]]
+                    for s_next in self.states
+                )
+                q_table[s_idx, a_idx] = q_value
+        return q_table
 
 
-
-    # def get_transition_dict(self):
-    #     # The transition_dict is the transition function such that transition_dict[state][mask][next_state]=probability.
-    #     for state, act, next_state in itertools.product(self.augmented_states, self.augmented_states):
-    #         if next_state[1] == mask:
-    #             self.transition_dict[state][mask][next_state] = self.get_transition_probability(state[0], next_state[
-    #                 0])
-    #         else:
-    #             self.transition_dict[state][mask][next_state] = 0.0
-    #     return
+    # def convert_policy(self, policy):
+    #     policy_m = np.zeros([len(self.states), len(self.actions)])
+    #     i = 0
+    #     for st in self.states:
+    #         for act in self.actions:
+    #             policy_m[i] = policy[st][act]
+    #             i += 1
+    #     return policy_m
 
     def get_transition_mat(self):
         # # The matrix representation of the transition function. transition_mat[i, j, action] = probability.
@@ -139,10 +176,10 @@ class HiddenMarkovModelP2:
         #     self.transition_dict[state][next_state]
 
         # The matrix representation of the transition function. transition_mat[i, j, action] = probability.
-        for state, next_state, action in itertools.product(self.augmented_states, self.augmented_states,
+        for state, next_state, action in itertools.product(self.states, self.states,
                                                            self.agent_mdp.actlist):
             self.transition_mat[
-                self.augmented_states_indx_dict[state], self.augmented_states_indx_dict[next_state], self.agent_mdp.actlist.index(action)] = \
+                self.states_indx_dict[state], self.states_indx_dict[next_state], self.agent_mdp.actlist.index(action)] = \
                 self.transition_dict[state][action][next_state]
 
         return
@@ -158,7 +195,7 @@ class HiddenMarkovModelP2:
 
     def get_emission_prob(self):
         # In the emission function for each state, and observation pairs.
-        for state in self.augmented_states:
+        for state in self.states:
             for obs in self.observations:
                 self.emission_prob[state][obs] = self.get_emission_probability(state, obs)
         return
@@ -182,14 +219,14 @@ class HiddenMarkovModelP2:
 
     def get_initial_dist(self):
         # Each augmented state, have an initial distribution. Consider initial mask to be the first sensor. # TODO: Change this to no masking action.
-        for state in self.augmented_states:
+        for state in self.states:
             self.initial_dist[state] = self.agent_mdp.initial_distribution[state]
-            self.mu_0[self.augmented_states_indx_dict[state]] = self.initial_dist[state]
+            self.mu_0[self.states_indx_dict[state]] = self.initial_dist[state]
 
         return
 
     def get_state_obs2(self):
-        for state in self.augmented_states:
+        for state in self.states:
             obs = set([])
             for sensors in self.sensors.sensors:
                 if state in self.sensors.coverage[sensors]:
@@ -204,7 +241,7 @@ class HiddenMarkovModelP2:
 
     def get_initial_states(self):
         # Obtain the set of initial states.
-        for state in self.augmented_states:
+        for state in self.states:
             if self.initial_dist[state] > 0:
                 self.initial_states.add(state)
         return
