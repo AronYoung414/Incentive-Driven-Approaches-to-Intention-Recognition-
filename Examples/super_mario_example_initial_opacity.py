@@ -4,9 +4,9 @@ from setup_and_solvers.gridworld_env_multi_init_states import *
 # from setup_and_solvers.LP_for_nominal_policy import *
 from setup_and_solvers.initial_opacity_gradient_calculation import *
 
-logger.add("logs_for_examples/log_file_mario_example_information_theoretic_opacity.log")
-
-logger.info("This is the log file for the 6X6 gridworld with goal states 9, 20, 23 test case.")
+# logger.add("logs_for_examples/log_file_mario_example_information_theoretic_opacity.log")
+#
+# logger.info("This is the log file for the 6X6 gridworld with goal states 9, 20, 23 test case.")
 
 # Initial set-up for a 6x6 gridworld.
 ncols = 6
@@ -65,18 +65,20 @@ agent_gw_1.mdp.gettrans()
 agent_gw_1.mdp.get_reward()
 agent_gw_1.draw_state_labels()
 
+print(agent_gw_1.mdp.trans)
+
 # reward/ value matrix for the agent.
-value_dict = dict()
-for state in agent_gw_1.mdp.states:
-    if state in reward_states:
-        value_dict[state] = 1
-    else:
-        value_dict[state] = 0
-
-# TODO: The augmented states still consider the gridcells with obstacles. Try by omitting the obstacle filled states
-#  -> reduces computation.
-
-hmm_p2 = HiddenMarkovModelP2(agent_gw_1.mdp, sensor_net, value_dict=value_dict, secret_goal_states=secret_goal_states)
+# value_dict = dict()
+# for state in agent_gw_1.mdp.states:
+#     if state in reward_states:
+#         value_dict[state] = 1
+#     else:
+#         value_dict[state] = 0
+#
+# # TODO: The augmented states still consider the gridcells with obstacles. Try by omitting the obstacle filled states
+# #  -> reduces computation.
+#
+# hmm_p2 = HiddenMarkovModelP2(agent_gw_1.mdp, sensor_net, value_dict=value_dict, secret_goal_states=secret_goal_states)
 
 # masking_policy_gradient = PrimalDualPolicyGradient(hmm=hmm_p2, iter_num=1000, V=10, T=10, eta=1.5, kappa=0.1, epsilon=threshold)
 # masking_policy_gradient.solver()

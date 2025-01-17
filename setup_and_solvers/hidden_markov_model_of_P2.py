@@ -96,7 +96,8 @@ class HiddenMarkovModelP2:
 
         self.secret_goal_states = secret_goal_states  # The secret goal states.
         # self.get_secret_goal_states(secret_goal_states)
-        self.optimal_theta = self.get_optimal_theta(self.get_policy_entropy(tau=0.05))[0]
+        self.optimal_V, self.policy = self.get_policy_entropy(tau=0.05)
+        self.optimal_theta = self.get_optimal_theta(self.optimal_V)
 
     def get_value_dict(self):
         # Assign cost/reward/value.

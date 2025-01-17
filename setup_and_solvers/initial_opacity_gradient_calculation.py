@@ -22,12 +22,13 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class InitialOpacityPolicyGradient:
-    def __init__(self, hmm_list, ex_num, iter_num=1000, batch_size=1, V=100, T=10, eta=1, kappa=0.1, epsilon=0):
+    def __init__(self, hmm_list, modify_list, ex_num, iter_num=1000, batch_size=1, V=100, T=10, eta=1, kappa=0.1, epsilon=0):
         for hmm in hmm_list:
             if not isinstance(hmm, HiddenMarkovModelP2):
                 raise TypeError("Expected hmm to be an instance of HiddenMarkovModelP2.")
 
         self.num_of_types = len(hmm_list)
+        self.modify_list = modify_list
         self.prior = np.ones(self.num_of_types) / self.num_of_types
         self.prior = torch.from_numpy(self.prior).type(dtype=torch.float32)
         self.hmm_list = hmm_list  # Hidden markov model of type 1.
@@ -40,14 +41,20 @@ class InitialOpacityPolicyGradient:
         self.kappa = kappa  # step size for lambda.
         self.epsilon = epsilon  # value threshold.
 
-        self.num_of_states = len(self.hmm_list[0].states)
-        self.num_of_actions = len(self.hmm_list[0].actions)
+        # The states and actions of original MDP
+        self.states = self.hmm_list[0].states
+        self.actions = self.hmm_list[0].actions
+        self.num_of_states = len(self.states)
+        self.num_of_actions = len(self.actions)
+        self.x_size = self.num_of_states * self.num_of_actions
 
         # Initialize the masking policy parameters. self.theta = np.random.random([len(self.hmm.augmented_states),
         # len(self.hmm.masking_acts)])
 
-        # Defining theta in pyTorch ways.
+        # Defining optimal theta in pyTorch ways.
         self.theta_torch_list = []
+        # Define the list of optimal policies
+        # self.policy_list = []
         # Define transition matrix for each type
         self.transition_mat_torch_list = []
         # Define initial distribution for each type
@@ -62,6 +69,8 @@ class InitialOpacityPolicyGradient:
             hmm = hmm_list[type_num]
             # Construct theta in pyTorch ways.
             self.theta_torch_list.append(torch.from_numpy(hmm.optimal_theta).type(dtype=torch.float32))
+            # Construct the list of optimal policy for each type of agent
+            # self.policy_list.append(hmm.policy)
             # Construct transition matrix for each type
             self.transition_mat_torch_list.append(torch.from_numpy(hmm.transition_mat).type(dtype=torch.float32))
             self.transition_mat_torch_list[type_num] = self.transition_mat_torch_list[type_num].to(device)
@@ -98,6 +107,15 @@ class InitialOpacityPolicyGradient:
         # Construct the cost matrix -> Format: [state_indx, masking_act] = cost ## TODO: Change the cost matrix to value matrix.
         # self.value_matrix_1 = self.construct_value_matrix(hmm_1)
         # self.value_matrix_2 = self.construct_value_matrix(hmm_2)
+
+    def convert_policy(self, policy):
+        policy_m = np.zeros(self.x_size)
+        i = 0
+        for st in self.states:
+            for act in self.actions:
+                policy_m[i] = policy[st][act]
+                i += 1
+        return policy_m
 
     def construct_value_matrix(self, type_num):
         hmm = self.hmm_list[type_num]
@@ -341,6 +359,62 @@ class InitialOpacityPolicyGradient:
         nabla_H = nabla_H / self.batch_size
 
         return -H, -nabla_H
+
+    def dthetaT_dx(self, type_num):
+        # returns a NM X NM matrix, (i, j) is dtheta_i/dx_j
+        grad = np.zeros((self.x_size, self.x_size))
+        for m in self.modify_list:
+            grad_l = self.dthetaT_dx_line(m, type_num)
+            grad[:, m] = grad_l
+        return grad
+
+    def dthetaT_dx_line(self, index, type_num):
+        hmm = self.hmm_list[type_num]
+        policy_m = self.convert_policy(hmm.policy)
+        # dtheta_dx(s, a) = dtheta_dr(s, a) * dr(s, a)_dx(s, a), dr(s, a)_dx(s, a) = 1
+        # what we realize is dtheta_dr(s, a) here
+        # dtheta_dx_line returns one column in the dtheta_dx matrix
+        dtheta = np.zeros(self.x_size)
+        r_indicator = np.zeros(self.x_size)
+        r_indicator[index] = 1
+        dtheta_old = dtheta.copy()
+        delta = np.inf
+        itcount_d = 0
+        while delta > self.epsilon:
+            # print(f"{itcount_d} iterations")
+            # print(self.policy_m)
+            # print(self.policy_m * dtheta)
+            dtheta = r_indicator + hmm.agent_mdp.disc_factor * self.construct_P(type_num).dot(policy_m * dtheta)
+            delta = np.max(abs(dtheta - dtheta_old))
+            dtheta_old = dtheta
+            itcount_d += 1
+        # dtheta_ = self.mdp.theta_evaluation(r_indicator, self.policy)
+        # print("x is", self.x)
+        # print("Matrix_result:", dtheta)
+        # print("Evaluation result:", dtheta_)
+        return dtheta
+
+    def construct_P(self, type_num):
+        hmm = self.hmm_list[type_num]
+        P = np.zeros((self.x_size, self.x_size))
+        for i in range(self.num_of_states):
+            for j in range(self.num_of_actions):
+                for next_index, pro in hmm.transition_dict[i][hmm.actions[j]].items():
+                    if hmm.states[next_index] != 'Sink':
+                        # next_index = self.mdp.states.index(next_st)
+                        P[i * self.num_of_actions + j][next_index * self.num_of_actions: (next_index + 1) * self.num_of_actions] = pro
+        return P
+
+
+    def dtheta_dx(self):
+        grads = []
+        for type_num in range(0,self.num_of_types):
+            grad_T = self.dthetaT_dx(type_num)
+            grads.append(grad_T)
+        return np.vstack(grads)
+
+
+
 
     # def log_policy_gradient(self, state, act):
     #
