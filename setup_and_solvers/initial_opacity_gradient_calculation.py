@@ -552,10 +552,13 @@ class InitialOpacityPolicyGradient:
             print("The approximate entropy is", approximate_cond_entropy / trajectory_iter)
             self.entropy_list.append(approximate_cond_entropy / trajectory_iter)
 
+            print(f"Memory allocated: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+            print(f"Memory cached: {torch.cuda.memory_reserved() / 1e9:.2f} GB")
+
             # grad_L = (grad_H / trajectory_iter)
             # Use the above line for only the entropy term.
             grad = (grad / trajectory_iter)
-            print("The gradient of entropy", grad / trajectory_iter)
+            # print("The gradient of entropy", grad / trajectory_iter)
             # print("The gradient of value", grad_V_comparison_total / trajectory_iter)
 
             # print("The approximate value is", approximate_value_total / trajectory_iter)

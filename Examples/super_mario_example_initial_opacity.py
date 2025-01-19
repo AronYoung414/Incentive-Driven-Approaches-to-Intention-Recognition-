@@ -76,22 +76,22 @@ agent_gw_2.draw_state_labels()
 value_dict_1 = dict()
 for state in agent_gw_1.mdp.states:
     if state == 5:
-        value_dict_1[state] = 2
+        value_dict_1[state] = 0.2
     elif state == 35:
-        value_dict_1[state] = 1
+        value_dict_1[state] = 0.1
     elif state in penalty_states:
-        value_dict_1[state] = -10
+        value_dict_1[state] = -1
     else:
         value_dict_1[state] = 0
 
 value_dict_2 = dict()
 for state in agent_gw_1.mdp.states:
     if state == 5:
-        value_dict_1[state] = 2
+        value_dict_1[state] = 0.2
     elif state == 35:
-        value_dict_1[state] = 1
+        value_dict_1[state] = 0.1
     elif state in penalty_states:
-        value_dict_1[state] = -3
+        value_dict_1[state] = -0.3
     else:
         value_dict_1[state] = 0
 
@@ -121,7 +121,7 @@ hmm_list = [hmm_1, hmm_2]
 # masking_policy_gradient = PrimalDualPolicyGradient(hmm=hmm_p2, iter_num=1000, V=10, T=10, eta=1.5, kappa=0.1, epsilon=threshold)
 # masking_policy_gradient.solver()
 
-masking_policy_gradient = InitialOpacityPolicyGradient(hmm_list=hmm_list, ex_num=6, iter_num=5000, batch_size=100, V=2000,
+masking_policy_gradient = InitialOpacityPolicyGradient(hmm_list=hmm_list, ex_num=1, iter_num=5000, batch_size=100, V=500,
                                                        T=12,
                                                        eta=0.5)
 
