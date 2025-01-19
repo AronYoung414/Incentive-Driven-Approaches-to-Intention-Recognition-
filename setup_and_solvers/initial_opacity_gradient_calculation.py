@@ -560,7 +560,7 @@ class InitialOpacityPolicyGradient:
             # grad_L = (grad_H / trajectory_iter)
             # Use the above line for only the entropy term.
             grad = (grad / trajectory_iter)
-            # print("The gradient of entropy", grad / trajectory_iter)
+            print("The gradient of entropy", grad / trajectory_iter)
             # print("The gradient of value", grad_V_comparison_total / trajectory_iter)
 
             # print("The approximate value is", approximate_value_total / trajectory_iter)
@@ -570,6 +570,7 @@ class InitialOpacityPolicyGradient:
             # Update theta_torch under the no_grad() to ensure that it remains as the 'leaf node.'
             with torch.no_grad():
                 self.x = self.x - self.eta * grad
+                self.x = torch.clamp(self.x, min=0)
                 # print(grad)
 
             # self.lambda_mul = (self.lambda_mul - self.kappa *
