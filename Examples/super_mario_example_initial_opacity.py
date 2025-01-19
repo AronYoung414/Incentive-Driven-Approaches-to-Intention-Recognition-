@@ -21,7 +21,7 @@ penalty_states = [4, 10, 11]
 obstacles = [17, 19]
 unsafe_u = []
 # non_init_states = [1, 25, 9, 14, 15, 17, 19, 23]
-initial = {12, 18}
+initial = {0}
 initial_dist = dict([])
 # considering a single initial state.
 for state in range(36):
@@ -77,22 +77,22 @@ trans_2 = agent_gw_1.mdp.trans
 value_dict_1 = dict()
 for state in agent_gw_1.mdp.states:
     if state == 5:
-        value_dict_1[state] = 0.2
+        value_dict_1[state] = 0.1
     elif state == 35:
-        value_dict_1[state] = 1
+        value_dict_1[state] = 0.1
     elif state in penalty_states:
-        value_dict_1[state] = -1
+        value_dict_1[state] = -0.1
     else:
         value_dict_1[state] = 0
 
 value_dict_2 = dict()
 for state in agent_gw_2.mdp.states:
     if state == 5:
-        value_dict_2[state] = 0.2
+        value_dict_2[state] = 0.1
     elif state == 35:
-        value_dict_2[state] = 1
+        value_dict_2[state] = 0.1
     elif state in penalty_states:
-        value_dict_2[state] = -0.3
+        value_dict_2[state] = -20
     else:
         value_dict_2[state] = 0
 
@@ -119,11 +119,14 @@ hmm_1 = HiddenMarkovModelP2(agent_gw_1.mdp, sensor_net, side_payment, modify_lis
 hmm_2 = HiddenMarkovModelP2(agent_gw_2.mdp, sensor_net, side_payment, modify_list, value_dict=value_dict_2)
 hmm_list = [hmm_1, hmm_2]
 
+policy_1 = hmm_list[0].policy
+policy_2 = hmm_list[1].policy
+
 # masking_policy_gradient = PrimalDualPolicyGradient(hmm=hmm_p2, iter_num=1000, V=10, T=10, eta=1.5, kappa=0.1, epsilon=threshold)
 # masking_policy_gradient.solver()
 
-masking_policy_gradient = InitialOpacityPolicyGradient(hmm_list=hmm_list, ex_num=1, iter_num=5000, batch_size=100, V=500,
+masking_policy_gradient = InitialOpacityPolicyGradient(hmm_list=hmm_list, ex_num=1, iter_num=2000, batch_size=100, V=500,
                                                        T=12,
-                                                       eta=0.5)
+                                                       eta=0.1)
 
 masking_policy_gradient.solver()

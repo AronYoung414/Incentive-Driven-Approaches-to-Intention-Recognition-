@@ -10,7 +10,7 @@ import copy
 class MDP:
 
     def __init__(self, init=None, actlist=[], states=[], prob=dict([]), trans=dict([]), reward=dict([]),
-                 init_dist=dict([]), disc_factor=0.5, goal_states=set([])):
+                 init_dist=dict([]), disc_factor=0.9, goal_states=set([])):
         self.init = init
         self.actlist = actlist
         self.states = states

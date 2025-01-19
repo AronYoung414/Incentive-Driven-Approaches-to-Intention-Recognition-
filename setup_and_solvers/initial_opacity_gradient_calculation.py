@@ -53,6 +53,7 @@ class InitialOpacityPolicyGradient:
         self.x = torch.nn.Parameter(
             torch.zeros(self.x_size, dtype=torch.float32, device=device,
                         requires_grad=False))
+        self.x.data[self.modify_list] = 1
         self.weight = 0.1
 
         # Defining optimal theta in pyTorch ways.
@@ -299,6 +300,7 @@ class InitialOpacityPolicyGradient:
 
         # clearing .grad for the next gradient computation.
         theta_torch.grad.zero_()
+        # print("The type number is", type_num, "The prob is", result_prob_P_y_g_T)
 
         return result_prob_P_y_g_T, gradient_P_y_g_T
         # return resultant_matrix_prob_y_one_less, resultant_matrix, gradient_P_y_one_less
@@ -463,7 +465,7 @@ class InitialOpacityPolicyGradient:
         product = product + self.dh_dx()
         # nonzero_indices = product.nonzero(as_tuple=False)
         # print("Nonzero elements:", product[nonzero_indices].tolist())
-        return H, product
+        return H, - product
 
     def get_side_payment(self, x):
         side_payment = {}
@@ -495,8 +497,6 @@ class InitialOpacityPolicyGradient:
             # Update the optimal value function and the optimal policy
             self.hmm_list[type_num].optimal_V, self.hmm_list[type_num].policy = self.hmm_list[
                 type_num].get_policy_entropy(tau=0.1)
-            policy_1 = self.hmm_list[0].policy
-            policy_2 = self.hmm_list[1].policy
             # Update the
             self.hmm_list[type_num].optimal_theta = self.hmm_list[type_num].get_optimal_theta(
                 self.hmm_list[type_num].optimal_V)
@@ -571,7 +571,7 @@ class InitialOpacityPolicyGradient:
             with torch.no_grad():
                 self.x = self.x - self.eta * grad
                 self.x = torch.clamp(self.x, min=0)
-                # print(grad)
+                print("The side payment is", self.x)
 
             # self.lambda_mul = (self.lambda_mul - self.kappa *
             #                    ((approximate_value_total / trajectory_iter) - self.epsilon))

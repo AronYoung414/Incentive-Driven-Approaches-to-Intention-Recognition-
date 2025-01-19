@@ -109,7 +109,8 @@ class HiddenMarkovModelP2:
     def getcore(self, V, st, act):
             core = 0
             for st_, pro in self.transition_dict[st][act].items():
-                if st_ != "Sink":
+                # state = st_
+                if st_ != 36:
                     core += pro * V[self.states.index(st_)]
             return core
 
@@ -233,7 +234,6 @@ class HiddenMarkovModelP2:
                 if state in self.sensors.coverage[sensors]:
                     obs.add(sensors)
             self.state_obs2[state] = obs
-
         return
 
     def get_initial_state(self):
