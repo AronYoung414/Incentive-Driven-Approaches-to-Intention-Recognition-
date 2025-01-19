@@ -51,7 +51,7 @@ class InitialOpacityPolicyGradient:
         # About side payment
         self.x_size = self.num_of_states * self.num_of_actions
         self.x = torch.nn.Parameter(
-            torch.randn(self.x_size, dtype=torch.float32, device=device,
+            torch.zeros(self.x_size, dtype=torch.float32, device=device,
                         requires_grad=False))
         self.weight = 0.1
 
@@ -494,7 +494,9 @@ class InitialOpacityPolicyGradient:
             self.hmm_list[type_num].get_value_dict()
             # Update the optimal value function and the optimal policy
             self.hmm_list[type_num].optimal_V, self.hmm_list[type_num].policy = self.hmm_list[
-                type_num].get_policy_entropy(tau=0.05)
+                type_num].get_policy_entropy(tau=0.1)
+            policy_1 = self.hmm_list[0].policy
+            policy_2 = self.hmm_list[1].policy
             # Update the
             self.hmm_list[type_num].optimal_theta = self.hmm_list[type_num].get_optimal_theta(
                 self.hmm_list[type_num].optimal_V)
