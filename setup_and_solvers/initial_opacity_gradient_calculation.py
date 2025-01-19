@@ -1,5 +1,5 @@
-import itertools
-import os
+# import itertools
+# import os
 
 import matplotlib.pyplot as plt
 
@@ -9,9 +9,10 @@ import torch
 import time
 import torch.nn.functional as F
 import itertools
-import gc
+# import gc
 import pickle
-from loguru import logger
+
+# from loguru import logger
 
 # torch.manual_seed(0)  # set random seed
 
@@ -22,13 +23,14 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class InitialOpacityPolicyGradient:
-    def __init__(self, hmm_list, modify_list, ex_num, iter_num=1000, batch_size=1, V=100, T=10, eta=1, kappa=0.1, epsilon=0):
+    def __init__(self, hmm_list, ex_num, iter_num=1000, batch_size=1, V=100, T=10, eta=1):
         for hmm in hmm_list:
             if not isinstance(hmm, HiddenMarkovModelP2):
                 raise TypeError("Expected hmm to be an instance of HiddenMarkovModelP2.")
 
         self.num_of_types = len(hmm_list)
-        self.modify_list = modify_list
+        self.true_type_num = 1
+        self.modify_list = hmm_list[0].modify_list
         self.prior = np.ones(self.num_of_types) / self.num_of_types
         self.prior = torch.from_numpy(self.prior).type(dtype=torch.float32)
         self.hmm_list = hmm_list  # Hidden markov model of type 1.
@@ -38,18 +40,20 @@ class InitialOpacityPolicyGradient:
         self.batch_size = batch_size  # number of trajectories processed in each batch.
         self.T = T  # length of the sampled trajectory.
         self.eta = eta  # step size for theta.
-        self.kappa = kappa  # step size for lambda.
-        self.epsilon = epsilon  # value threshold.
+        # self.kappa = kappa  # step size for lambda.
+        # self.epsilon = epsilon  # value threshold.
 
         # The states and actions of original MDP
         self.states = self.hmm_list[0].states
         self.actions = self.hmm_list[0].actions
         self.num_of_states = len(self.states)
         self.num_of_actions = len(self.actions)
+        # About side payment
         self.x_size = self.num_of_states * self.num_of_actions
-
-        # Initialize the masking policy parameters. self.theta = np.random.random([len(self.hmm.augmented_states),
-        # len(self.hmm.masking_acts)])
+        self.x = torch.nn.Parameter(
+            torch.randn(self.x_size, dtype=torch.float32, device=device,
+                        requires_grad=False))
+        self.weight = 0.1
 
         # Defining optimal theta in pyTorch ways.
         self.theta_torch_list = []
@@ -61,43 +65,16 @@ class InitialOpacityPolicyGradient:
         self.mu_0_torch_list = []
         # Format: [observation_indx, aug_state_indx] = probability
         self.B_torch_list = []
-        # Construct the cost matrix -> Format: [state_indx, masking_act] = cost
-        self.value_matrix_list = []
-        # Construct the transition matrix for each type
+        # Define the transition matrix for each type
         self.T_theta_list = []
-        for type_num in range(self.num_of_types):
-            hmm = hmm_list[type_num]
-            # Construct theta in pyTorch ways.
-            self.theta_torch_list.append(torch.from_numpy(hmm.optimal_theta).type(dtype=torch.float32))
-            # Construct the list of optimal policy for each type of agent
-            # self.policy_list.append(hmm.policy)
-            # Construct transition matrix for each type
-            self.transition_mat_torch_list.append(torch.from_numpy(hmm.transition_mat).type(dtype=torch.float32))
-            self.transition_mat_torch_list[type_num] = self.transition_mat_torch_list[type_num].to(device)
-            # Construct initial distribution for each type
-            self.mu_0_torch_list.append(torch.from_numpy(hmm.mu_0).type(dtype=torch.float32))
-            self.mu_0_torch_list[type_num] = self.mu_0_torch_list[type_num].to(device)
-            self.T_theta_list.append(self.construct_transition_matrix_T_theta_torch(type_num))
-            # Construct observation matrices
-            self.B_torch_list.append(self.construct_B_matrix_torch(type_num))
-            # Construct reward matrices
-            self.value_matrix_list.append(self.construct_value_matrix(type_num))
-        # # Define transition matrix for type 2
-        # self.transition_mat_torch_2 = torch.from_numpy(self.hmm_2.transition_mat).type(dtype=torch.float32)
-        # self.transition_mat_torch_2 = self.transition_mat_torch_2.to(device)
-        # Define initial distribution for type 1
+        # Get all the lists we need
+        self.get_all_lists()
 
-        # # Define initial distribution for type 2
-        # self.mu_0_torch_2 = torch.from_numpy(self.hmm_2.mu_0).type(dtype=torch.float32)
-        # self.mu_0_torch_2 = self.mu_0_torch_2.to(device)
-
-        # Initialize the Lagrangian multiplier.
-        # self.lambda_mul = np.random.uniform(0, 1)
-        # self.lambda_mul = torch.rand(1, device=device)
-        # Lists for entropy and threshold.
         self.entropy_list = list([])
         self.threshold_list = list([])
         self.iteration_list = list([])
+        self.theta_torch_collection = list([])
+        self.x_list = list([])
 
         # Format: [observation_indx, aug_state_indx] = probability
         # self.B_torch_1 = self.construct_B_matrix_torch(self.hmm_1)
@@ -108,6 +85,38 @@ class InitialOpacityPolicyGradient:
         # self.value_matrix_1 = self.construct_value_matrix(hmm_1)
         # self.value_matrix_2 = self.construct_value_matrix(hmm_2)
 
+    def get_all_lists(self):
+        for type_num in range(self.num_of_types):
+            hmm = self.hmm_list[type_num]
+            # Construct theta in pyTorch ways.
+            self.theta_torch_list.append(torch.from_numpy(hmm.optimal_theta).type(dtype=torch.float32))
+            self.theta_torch_list[type_num] = self.theta_torch_list[type_num].to(device)
+            self.theta_torch_list[type_num].requires_grad_(True)
+            # Construct the list of optimal policy for each type of agent
+            # self.policy_list.append(hmm.policy)
+            # Construct transition matrix for each type
+            self.transition_mat_torch_list.append(torch.from_numpy(hmm.transition_mat).type(dtype=torch.float32))
+            self.transition_mat_torch_list[type_num] = self.transition_mat_torch_list[type_num].to(device)
+            # Construct initial distribution for each type
+            self.mu_0_torch_list.append(torch.from_numpy(hmm.mu_0).type(dtype=torch.float32))
+            self.mu_0_torch_list[type_num] = self.mu_0_torch_list[type_num].to(device)
+            # Construct the transition matrices
+            self.T_theta_list.append(self.construct_transition_matrix_T_theta_torch(type_num))
+            # Construct observation matrices
+            self.B_torch_list.append(self.construct_B_matrix_torch(type_num))
+
+    def update_the_lists(self):
+        self.theta_torch_list = []
+        self.T_theta_list = []
+        for type_num in range(self.num_of_types):
+            hmm = self.hmm_list[type_num]
+            # Update the theta list for the future computation
+            self.theta_torch_list.append(torch.from_numpy(hmm.optimal_theta).type(dtype=torch.float32))
+            self.theta_torch_list[type_num] = self.theta_torch_list[type_num].to(device)
+            self.theta_torch_list[type_num].requires_grad_(True)
+            # Update the transition matrices which depends on theta
+            self.T_theta_list.append(self.construct_transition_matrix_T_theta_torch(type_num))
+
     def convert_policy(self, policy):
         policy_m = np.zeros(self.x_size)
         i = 0
@@ -116,6 +125,14 @@ class InitialOpacityPolicyGradient:
                 policy_m[i] = policy[st][act]
                 i += 1
         return policy_m
+
+    def get_x(self, side_payment):
+        x = []
+        for s_idx in range(self.num_of_states):
+            for a_idx in range(self.num_of_actions):
+                x.append(side_payment[s_idx][a_idx])
+        x = np.array(x)
+        return x
 
     def construct_value_matrix(self, type_num):
         hmm = self.hmm_list[type_num]
@@ -143,7 +160,7 @@ class InitialOpacityPolicyGradient:
 
     def sample_trajectories(self, type_num):
         hmm = self.hmm_list[type_num]
-        theta = self.theta_torch_list[type_num]
+        # theta = self.theta_torch_list[type_num]
         state_data = np.zeros([self.batch_size, self.T], dtype=np.int32)
         action_data = np.zeros([self.batch_size, self.T], dtype=np.int32)
         y_obs_data = []
@@ -230,22 +247,21 @@ class InitialOpacityPolicyGradient:
         return T_theta @ B_diag
 
     def compute_A_matrices(self, type_num, y_v):
-        hmm = self.hmm_list[type_num]
-        B_torch = self.B_torch_list[type_num]
-        T_theta = self.T_theta_list[type_num]
+        # hmm = self.hmm_list[type_num]
+        # B_torch = self.B_torch_list[type_num]
+        # T_theta = self.T_theta_list[type_num]
         # Construct all of the A_o_t.
         # Outputs a list of all of the A matrices given an observation sequence.
         A_matrices = []  # sequece -> Ao1, Ao2, ..., AoT.
         for o_t in y_v:
             A_o_t = self.construct_A_matrix_torch(type_num, o_t)
             A_matrices.append(A_o_t)
-
         return A_matrices
 
     def compute_probability_of_observations_given_type(self, type_num, A_matrices):
         # Computes P_\theta(y|T) = P(o_{1:T}) = 1^T.A^\theta_{o_{T:1}}.\mu_{0,T}
         # Also computes A^\theta_{o_{T-1:1}}.\mu_0 -->  Required in later calculations.
-
+        theta_torch = self.theta_torch_list[type_num]
         # A_matrices is a list of A matrices computed given T_theta and a sequence of observations.
 
         # # Define one hot vector
@@ -272,9 +288,8 @@ class InitialOpacityPolicyGradient:
         # resultant_matrix_prob_y_one_less = resultant_matrix.sum()
         # Compute the gradient later by simply using result_prob_to_return.backward() --> This uses autograd to
         # compute gradient.
-
         result_prob_P_y_g_T.backward(retain_graph=True)  # Gradient of P_\theta(y).
-        gradient_P_y_g_T = self.theta_torch.grad.clone()
+        gradient_P_y_g_T = theta_torch.grad.clone()
 
         # result_prob_P_y_s0.backward(retain_graph=True)  # Gradient of P_\theta(y|s0).
         # gradient_P_y_s0 = self.theta_torch.grad.clone()
@@ -283,7 +298,7 @@ class InitialOpacityPolicyGradient:
         # gradient_P_y_one_less = self.theta_torch.grad.clone()
 
         # clearing .grad for the next gradient computation.
-        self.theta_torch.grad.zero_()
+        theta_torch.grad.zero_()
 
         return result_prob_P_y_g_T, gradient_P_y_g_T
         # return resultant_matrix_prob_y_one_less, resultant_matrix, gradient_P_y_one_less
@@ -294,20 +309,22 @@ class InitialOpacityPolicyGradient:
         """
         result_prob_P_y = 0
         gradient_P_y = torch.zeros([self.num_of_states, self.num_of_actions],
-                              device=device)
-        for i in range(self.num_of_types):
-            result_prob_P_y_g_T, gradient_P_y_g_T = self.compute_probability_of_observations_given_type(self.mu_0_torch_list[i], A_matrices_list[i])
-            result_prob_P_y = result_prob_P_y + result_prob_P_y_g_T * self.prior[i]
-            gradient_P_y = gradient_P_y_g_T + self.prior[i] * gradient_P_y_g_T
+                                   device=device)
+        for type_num in range(self.num_of_types):
+            result_prob_P_y_g_T, gradient_P_y_g_T = self.compute_probability_of_observations_given_type(
+                type_num, A_matrices_list[type_num])
+            result_prob_P_y = result_prob_P_y + result_prob_P_y_g_T * self.prior[type_num]
+            gradient_P_y = gradient_P_y_g_T + self.prior[type_num] * gradient_P_y_g_T
         return result_prob_P_y, gradient_P_y
 
     def P_T_g_Y(self, type_num, A_matrices_list):
         # Computes P_\theta(s_0|y) = P_\theta(y|s_0) \mu_0(s_0) / P_\theta(y)
-        prob_P_y_T, gradient_P_y_T = self.compute_probability_of_observations_given_type(type_num, A_matrices_list[type_num])
-        prob_P_y, gradient_P_y = self.compute_probability_of_observations_given_type(type_num, A_matrices_list)
+        prob_P_y_T, gradient_P_y_T = self.compute_probability_of_observations_given_type(type_num,
+                                                                                         A_matrices_list[type_num])
+        prob_P_y, gradient_P_y = self.compute_probability_of_observations(A_matrices_list)
         P_T_y = prob_P_y_T * self.prior[type_num] / prob_P_y
         gradient_P_T_y = ((self.prior[type_num] / prob_P_y) * gradient_P_y_T -
-                           (self.prior[type_num] * prob_P_y_T / prob_P_y ** 2) * gradient_P_y)
+                          (self.prior[type_num] * prob_P_y_T / prob_P_y ** 2) * gradient_P_y)
         return P_T_y, gradient_P_T_y, prob_P_y, gradient_P_y
         # return resultant_matrix_prob_y_one_less, resultant_matrix, gradient_P_y_one_less
 
@@ -316,7 +333,7 @@ class InitialOpacityPolicyGradient:
         # H(S_0|Y; \theta).
 
         H = torch.tensor(0, dtype=torch.float32, device=device)
-        nabla_H = torch.zeros([self.num_of_states, self.num_of_actions, self.num_of_types],
+        nabla_H = torch.zeros([self.num_of_types, self.num_of_states, self.num_of_actions],
                               device=device)
 
         for v in range(self.batch_size):
@@ -325,7 +342,8 @@ class InitialOpacityPolicyGradient:
             A_matrices_list = []
             for type_num in range(self.num_of_types):
                 # construct the A matrices.
-                A_matrices_list.append(self.compute_A_matrices(self.T_theta_list[type_num], y_v))  # Compute for each y_v.
+                A_matrices_list.append(
+                    self.compute_A_matrices(type_num, y_v))  # Compute for each y_v.
 
             for type_num in range(self.num_of_types):
                 # values for the term w_T = 1.
@@ -351,7 +369,7 @@ class InitialOpacityPolicyGradient:
 
                 H = H + term_p_logp
 
-                nabla_H[:, :, type_num] = nabla_H[:, :, type_num] + gradient_term
+                nabla_H[type_num, :, :] = nabla_H[type_num, :, :] + gradient_term
 
         H = H / self.batch_size
         # H.backward()
@@ -360,15 +378,15 @@ class InitialOpacityPolicyGradient:
 
         return -H, -nabla_H
 
-    def dthetaT_dx(self, type_num):
+    def dtheta_T_dx(self, type_num):
         # returns a NM X NM matrix, (i, j) is dtheta_i/dx_j
         grad = np.zeros((self.x_size, self.x_size))
         for m in self.modify_list:
-            grad_l = self.dthetaT_dx_line(m, type_num)
+            grad_l = self.dtheta_T_dx_line(m, type_num)
             grad[:, m] = grad_l
         return grad
 
-    def dthetaT_dx_line(self, index, type_num):
+    def dtheta_T_dx_line(self, index, type_num, epsilon=0.0001):
         hmm = self.hmm_list[type_num]
         policy_m = self.convert_policy(hmm.policy)
         # dtheta_dx(s, a) = dtheta_dr(s, a) * dr(s, a)_dx(s, a), dr(s, a)_dx(s, a) = 1
@@ -380,7 +398,7 @@ class InitialOpacityPolicyGradient:
         dtheta_old = dtheta.copy()
         delta = np.inf
         itcount_d = 0
-        while delta > self.epsilon:
+        while delta > epsilon:
             # print(f"{itcount_d} iterations")
             # print(self.policy_m)
             # print(self.policy_m * dtheta)
@@ -402,90 +420,85 @@ class InitialOpacityPolicyGradient:
                 for next_index, pro in hmm.transition_dict[i][hmm.actions[j]].items():
                     if hmm.states[next_index] != 'Sink':
                         # next_index = self.mdp.states.index(next_st)
-                        P[i * self.num_of_actions + j][next_index * self.num_of_actions: (next_index + 1) * self.num_of_actions] = pro
+                        P[i * self.num_of_actions + j][
+                        next_index * self.num_of_actions: (next_index + 1) * self.num_of_actions] = pro
         return P
-
 
     def dtheta_dx(self):
         grads = []
-        for type_num in range(0,self.num_of_types):
-            grad_T = self.dthetaT_dx(type_num)
+        for type_num in range(0, self.num_of_types):
+            grad_T = self.dtheta_T_dx(type_num)
+            for m in self.modify_list:
+                grad_T[m] = 0
             grads.append(grad_T)
         return np.vstack(grads)
 
+    def dh_dx(self):
+        # Initialize gradient array
+        grad = np.zeros(self.x_size)
 
+        # Update gradient for each index in modify_list
+        for m in self.modify_list:
+            if self.x[m] >= 0:
+                grad[m] = self.weight  # Positive values, update gradient
+            else:
+                grad[m] = -self.weight  # Negative values, update gradient
 
+        # Convert to torch tensor and move to the correct device
+        grad_tensor = torch.from_numpy(grad).type(dtype=torch.float32)  # No in-place modification
+        grad_tensor = grad_tensor.to(device)  # Move to the specified device
 
-    # def log_policy_gradient(self, state, act):
-    #
-    #     logits_2 = self.theta_torch - self.theta_torch.max(dim=1, keepdim=True).values
-    #     action_indx = self.hmm.actions_indx_dict[act]
-    #
-    #     actions_probs_2 = F.softmax(logits_2, dim=1)
-    #     # actions_probs_2_prime = actions_probs_2[:, action_indx]
-    #     # actions_probs_2_prime = actions_probs_2
-    #
-    #     state_indicators = (torch.arange(self.num_of_states, device=device) == state).float()
-    #     # action_indicators = (torch.arange(len(self.hmm.masking_acts), device=device) == act).float()
-    #     action_indicators = torch.zeros_like(self.theta_torch, dtype=torch.float32, device=device)
-    #     action_indicators[:, action_indx] = 1.0
-    #
-    #     # action_difference = action_indicators - actions_probs_2_prime[:, None]
-    #     action_difference = action_indicators - actions_probs_2
-    #
-    #     # partial_pi_theta_2 = state_indicators[:, None] * action_difference
-    #     gradient_2 = state_indicators[:, None] * action_difference
-    #
-    #     # gradient_2 = partial_pi_theta_2
-    #
-    #     return gradient_2
-    #
-    # def nabla_value_function(self, state_data, action_data, gamma=1):
-    #
-    #     state_data = torch.tensor(state_data, dtype=torch.long, device=device)
-    #     action_data = torch.tensor(action_data, dtype=torch.long, device=device)
-    #
-    #     # state_indicators_2 = F.one_hot(state_data, num_classes=len(
-    #     #     self.hmm.augmented_states)).float()  # shape: (num_trajectories, trajectory_length, num_states)
-    #     # action_indicators_2 = F.one_hot(action_data, num_classes=len(
-    #     #     self.hmm.masking_acts)).float()  # shape: (num_trajectories, trajectory_length, num_actions)
-    #
-    #     state_indicators_2 = F.one_hot(state_data, num_classes=self.num_of_states).float()  # shape: (
-    #     # num_trajectories, trajectory_length, num_states)
-    #     action_indicators_2 = F.one_hot(action_data, num_classes=self.num_of_actions).float()  # shape: (
-    #     # num_trajectories, trajectory_length, num_actions)
-    #
-    #     # Vectorized log_policy_gradient for the entire batch (num_trajectories, trajectory_length, num_states,
-    #     # num_actions)
-    #     logits_2 = self.theta_torch.unsqueeze(0).unsqueeze(0)  # Broadcast to (1, 1, num_states, num_actions)
-    #     logits_2 = logits_2 - logits_2.max(dim=-1, keepdim=True)[0]  # For numerical stability in softmax
-    #     actions_probs_2 = F.softmax(logits_2, dim=-1)  # (1, 1, num_states, num_actions)
-    #
-    #     # Subtract action probabilities from action indicators (element-wise for all states and actions)
-    #     partial_pi_theta_2 = state_indicators_2.unsqueeze(-1) * (action_indicators_2.unsqueeze(
-    #         -2) - actions_probs_2)  # shape: (num_trajectories, trajectory_length, num_states, num_actions)
-    #
-    #     # Sum over the time axis to accumulate log_policy_gradient for each trajectory (num_trajectories, num_states,
-    #     # num_actions)
-    #     log_policy_gradient_2 = partial_pi_theta_2.sum(dim=1)  # Summing over the trajectory length (time steps)
-    #
-    #     # Compute the discounted return for each trajectory
-    #     costs_2 = torch.tensor([[self.value_matrix[s, a] for s, a in zip(state_data[i], action_data[i])] for i in
-    #                             range(self.batch_size)],
-    #                            dtype=torch.float32, device=device)  # shape: (num_trajectories, trajectory_length)
-    #     discounted_returns_2 = torch.sum(costs_2, dim=1)  # shape: (num_trajectories,)
-    #
-    #     # Reshape discounted returns for broadcasting in the final gradient computation
-    #     discounted_returns_2 = discounted_returns_2.view(-1, 1, 1)  # shape: (num_trajectories, 1, 1)
-    #
-    #     # Compute the value function gradient by multiplying discounted returns with log_policy_gradient
-    #     value_function_gradient_2 = (discounted_returns_2 * log_policy_gradient_2).sum(dim=0) / self.batch_size
-    #     # Averaging over trajectories
-    #
-    #     # Compute the average value function over all trajectories
-    #     value_function_2 = discounted_returns_2.mean().item()
-    #
-    #     return value_function_gradient_2, value_function_2
+        return grad_tensor
+
+    def total_derivative(self, y_obs_data):
+        H, nabla_H = self.approximate_conditional_entropy_and_gradient_S0_given_Y(y_obs_data)
+        nabla_H = nabla_H.reshape(-1)
+        nabla_H = nabla_H.unsqueeze(0)
+        nabla_Q = self.dtheta_dx()
+        nabla_Q = torch.from_numpy(nabla_Q).type(dtype=torch.float32)
+        nabla_Q = nabla_Q.to(device)
+        # nonzero_indices = nabla_Q.nonzero(as_tuple=False)
+        # print("Nonzero elements:", nabla_Q[nonzero_indices].tolist())
+        product = torch.matmul(nabla_H, nabla_Q)
+        product = product + self.dh_dx()
+        # nonzero_indices = product.nonzero(as_tuple=False)
+        # print("Nonzero elements:", product[nonzero_indices].tolist())
+        return H, product
+
+    def get_side_payment(self, x):
+        side_payment = {}
+        # Get the device of x
+        device = x.device
+        # Create the mask on the same device
+        mask = ~torch.isin(
+            torch.arange(len(x), device=device),
+            torch.tensor(self.modify_list, device=device)
+        )
+        # Use where with tensors on the same device
+        x = torch.where(mask, torch.zeros_like(x), x)
+        idx = 0
+        for state in self.states:
+            s_idx = self.states.index(state)
+            side_payment[state] = {}
+            for action in self.actions:
+                a_idx = self.actions.index(action)
+                side_payment[s_idx][a_idx] = x[idx].item()
+                idx += 1
+        return side_payment
+
+    def update_HMMs(self):
+        for type_num in range(self.num_of_types):
+            # Update the side payment based on updated x
+            self.hmm_list[type_num].side_payment = self.get_side_payment(self.x)
+            # Update the reward function
+            self.hmm_list[type_num].get_value_dict()
+            # Update the optimal value function and the optimal policy
+            self.hmm_list[type_num].optimal_V, self.hmm_list[type_num].policy = self.hmm_list[
+                type_num].get_policy_entropy(tau=0.05)
+            # Update the
+            self.hmm_list[type_num].optimal_theta = self.hmm_list[type_num].get_optimal_theta(
+                self.hmm_list[type_num].optimal_V)
+            self.update_the_lists()
 
     def solver(self):
         # Solve using policy gradient for initial-state opacity enforcement.
@@ -494,44 +507,45 @@ class InitialOpacityPolicyGradient:
             torch.cuda.empty_cache()
 
             approximate_cond_entropy = 0
-            grad_H = 0
-            grad_V_comparison_total = 0
-            approximate_value_total = 0
+            grad = 0
+            # grad_V_comparison_total = 0
+            # approximate_value_total = 0
 
             trajectory_iter = int(self.V / self.batch_size)
             # self.kappa = self.kappa / (i + 1)
             # self.eta = self.eta / (i + 1)
+            self.update_HMMs()
+            self.theta_torch_collection.append(self.theta_torch_list)
+            self.x_list.append(self.x)
 
             for j in range(trajectory_iter):
                 torch.cuda.empty_cache()
 
                 with torch.no_grad():
                     # Start with sampling the trajectories.
-                    state_data, action_data, y_obs_data = self.sample_trajectories()
+                    state_data, action_data, y_obs_data = self.sample_trajectories(self.true_type_num)
 
                 # Gradient ascent algorithm.
 
                 # # Construct the matrix T_theta.
-                T_theta = self.construct_transition_matrix_T_theta_torch()
+                # T_theta = self.construct_transition_matrix_T_theta_torch(type_num)
                 # Compute approximate conditional entropy and approximate gradient of entropy.
-                approximate_cond_entropy_new, grad_H_new = self.approximate_conditional_entropy_and_gradient_S0_given_Y(
-                    T_theta,
-                    y_obs_data)
+                approximate_cond_entropy_new, grad_new = self.total_derivative(y_obs_data)
                 approximate_cond_entropy = approximate_cond_entropy + approximate_cond_entropy_new.item()
 
                 # self.theta_torch = torch.nn.Parameter(self.theta_torch.detach().clone(), requires_grad=True)
 
-                grad_H = grad_H + grad_H_new
+                grad = grad + grad_new
                 # SGD gradients.
                 # grad_V = self.compute_policy_gradient_for_value_function(state_data, action_data, 1)
 
                 # Compare the above value with traditional function. #TODO: comment the next line if you only want entropy term.
-                grad_V_comparison, approximate_value = self.nabla_value_function(state_data, action_data, 1)
+                # grad_V_comparison, approximate_value = self.nabla_value_function(state_data, action_data, 1)
 
-                approximate_value_total = approximate_value_total + approximate_value
-                grad_V_comparison_total = grad_V_comparison_total + grad_V_comparison
+                # approximate_value_total = approximate_value_total + approximate_value
+                # grad_V_comparison_total = grad_V_comparison_total + grad_V_comparison
 
-                self.theta_torch = torch.nn.Parameter(self.theta_torch.detach().clone(), requires_grad=True)
+                # self.theta_torch = torch.nn.Parameter(self.theta_torch.detach().clone(), requires_grad=True)
 
                 # Computing gradient of Lagrangian with grad_H and grad_V.
                 # grad_L = grad_H + self.lambda_mul * grad_V
@@ -540,26 +554,28 @@ class InitialOpacityPolicyGradient:
 
             # grad_L = (grad_H / trajectory_iter)
             # Use the above line for only the entropy term.
-            grad_L = (grad_H / trajectory_iter) + self.lambda_mul * (grad_V_comparison_total / trajectory_iter)
-            # print("The gradient of entropy", grad_H / trajectory_iter)
+            grad = (grad / trajectory_iter)
+            print("The gradient of entropy", grad / trajectory_iter)
             # print("The gradient of value", grad_V_comparison_total / trajectory_iter)
 
-            print("The approximate value is", approximate_value_total / trajectory_iter)
-            self.threshold_list.append(approximate_value_total / trajectory_iter)
+            # print("The approximate value is", approximate_value_total / trajectory_iter)
+            # self.threshold_list.append(approximate_value_total / trajectory_iter)
 
             # SGD updates.
             # Update theta_torch under the no_grad() to ensure that it remains as the 'leaf node.'
             with torch.no_grad():
-                self.theta_torch = self.theta_torch + self.eta * grad_L
+                self.x = self.x - self.eta * grad
+                # print(grad)
 
-            self.lambda_mul = (self.lambda_mul - self.kappa *
-                               ((approximate_value_total / trajectory_iter) - self.epsilon))
+            # self.lambda_mul = (self.lambda_mul - self.kappa *
+            #                    ((approximate_value_total / trajectory_iter) - self.epsilon))
+            #
+            # self.lambda_mul = torch.clamp(self.lambda_mul,
+            #                               min=0.0)  # Clamping lambda values to be greater than or equal to 0.
 
-            self.lambda_mul = torch.clamp(self.lambda_mul,
-                                          min=0.0)  # Clamping lambda values to be greater than or equal to 0.
-
-            # re-initialize self.theta_torch to ensure it tracks the new set of computations.
-            self.theta_torch = torch.nn.Parameter(self.theta_torch.detach().clone(), requires_grad=True)
+            # re-initialize self.x to ensure it tracks the new set of computations.
+            self.x = torch.nn.Parameter(self.x[0].detach().clone(), requires_grad=False)
+            # print('The side payment is', self.x)
 
             end = time.time()
             print("Time for the iteration", i, ":", end - start, "s.")
@@ -568,28 +584,17 @@ class InitialOpacityPolicyGradient:
         self.iteration_list = range(self.iter_num)
 
         # Saving the results for plotting later.
-        with open(f'../Data_Initial/entropy_values_{self.ex_num}.pkl', 'wb') as file:
+        with open(f'../Data/entropy_values_{self.ex_num}.pkl', 'wb') as file:
             pickle.dump(self.entropy_list, file)
 
-        with open(f'../Data_Initial/value_function_list_{self.ex_num}', 'wb') as file:
+        with open(f'../Data/value_function_list_{self.ex_num}', 'wb') as file:
             pickle.dump(self.threshold_list, file)
 
-        # Saving the final policy from this implementation.
-        theta = self.theta_torch.detach().cpu()
-        # Compute softmax policy.
-        policies = {}
-        for aug_state in self.hmm.states:
-            state_actions = theta[self.hmm.states_indx_dict[aug_state]]
-            policy = torch.softmax(state_actions, dim=0)
-            policies[aug_state] = policy.tolist()
+        with open(f'../Data/x_list_{self.ex_num}', 'wb') as file:
+            pickle.dump(self.x_list, file)
 
-        # Print the policy to the log file.
-        logger.debug("The final control policy:")
-        logger.debug(policies)
-
-        # Save policies using pickle.
-        with open(f'../Data_Initial/final_control_policy_{self.ex_num}.pkl', 'wb') as file:
-            pickle.dump(policies, file)
+        with open(f'../Data/theta_collection_{self.ex_num}', 'wb') as file:
+            pickle.dump(self.theta_torch_collection, file)
 
         figure, axis = plt.subplots(2, 1)
 
@@ -599,7 +604,7 @@ class InitialOpacityPolicyGradient:
         plt.ylabel("Values")
         plt.legend()
         plt.grid(True)
-        plt.savefig(f'../Data_Initial/graph_{self.ex_num}.png')
+        plt.savefig(f'../Data/graph_{self.ex_num}.png')
         plt.show()
 
         return

@@ -6,7 +6,7 @@ import random
 
 
 class HiddenMarkovModelP2:
-    def __init__(self, agent_mdp, sensors, side_payment, state_obs2=dict([]), value_dict=dict([]), secret_goal_states=list([])):
+    def __init__(self, agent_mdp, sensors, side_payment, modify_list, state_obs2=dict([]), value_dict=dict([])):
         if not isinstance(agent_mdp, MDP):
             raise TypeError("Expected agent_mdp to be an instance of MDP.")
 
@@ -16,6 +16,7 @@ class HiddenMarkovModelP2:
         self.agent_mdp = agent_mdp
         self.sensors = sensors
         self.side_payment = side_payment
+        self.modify_list = modify_list
 
         # self.augmented_states = list()  # The augmented states space S x \Sigma # TODO: Check if this should be a set
         self.states = self.agent_mdp.states
@@ -44,11 +45,6 @@ class HiddenMarkovModelP2:
         self.value_dict_input = value_dict # The value dictionary for the augmented state-space i.e., only state dependednt.
         self.value_dict = defaultdict(lambda: defaultdict(dict))  # The format is [aug_st_indx][mask_act_indx]=value.
         self.get_value_dict()
-        for state in self.states:
-            s_idx = self.states_indx_dict[state]
-            for act in self.actions:
-                a_idx = self.actions_indx_dict[act]
-                self.value_dict[s_idx][a_idx] = self.value_dict[s_idx][a_idx] + self.side_payment[s_idx][a_idx]
 
         self.transition_dict = self.agent_mdp.trans
         # self.get_transition_dict()
@@ -69,6 +65,7 @@ class HiddenMarkovModelP2:
         self.observations.add('0')  # '0' represents the null observation.
         self.observations_indx_dict = dict()  # Defining a dictionary with [obs]=indx
         indx_num = 0
+
         for ob in self.observations:
             self.observations_indx_dict[ob] = indx_num
             indx_num += 1
@@ -94,7 +91,7 @@ class HiddenMarkovModelP2:
         self.initial_states = set()
         self.get_initial_states()
 
-        self.secret_goal_states = secret_goal_states  # The secret goal states.
+        # self.secret_goal_states = secret_goal_states  # The secret goal states.
         # self.get_secret_goal_states(secret_goal_states)
         self.optimal_V, self.policy = self.get_policy_entropy(tau=0.05)
         self.optimal_theta = self.get_optimal_theta(self.optimal_V)
@@ -102,8 +99,11 @@ class HiddenMarkovModelP2:
     def get_value_dict(self):
         # Assign cost/reward/value.
         for state in self.states:
+            s_idx = self.states_indx_dict[state]
             for act in self.actions:
+                a_idx = self.actions_indx_dict[act]
                 self.value_dict[self.states_indx_dict[state]][self.actions_indx_dict[act]] = self.value_dict_input[state]
+                self.value_dict[s_idx][a_idx] = self.value_dict[s_idx][a_idx] + self.side_payment[s_idx][a_idx]
         return
 
     def getcore(self, V, st, act):

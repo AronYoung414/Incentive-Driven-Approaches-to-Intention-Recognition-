@@ -31,7 +31,7 @@ for state in range(36):
     else:
         initial_dist[state] = 0
 
-robot_ts = read_from_file_MDP_old('robotmdp.txt')
+robot_ts = read_from_file_MDP_old('robotmdp_1.txt')
 
 # sensor setup
 sensors = {'A', 'B', 'C', 'D', 'E', 'NO'}

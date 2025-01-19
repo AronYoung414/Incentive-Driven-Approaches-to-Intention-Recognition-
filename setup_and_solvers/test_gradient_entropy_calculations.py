@@ -213,7 +213,7 @@ class PrimalDualPolicyGradientTest:
         # Multiplying with 1^T is nothing but summing up. Hence, we do the following.
         result_prob_P_y = result_prob.sum()
 
-        resultant_matrix_prob_y_one_less = resultant_matrix.sum()
+        # resultant_matrix_prob_y_one_less = resultant_matrix.sum()
         # Compute the gradient later by simply using result_prob_to_return.backward() --> This uses autograd to
         # compute gradient.
 

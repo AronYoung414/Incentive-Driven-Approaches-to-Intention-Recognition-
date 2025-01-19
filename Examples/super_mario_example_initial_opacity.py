@@ -15,12 +15,12 @@ target = [9, 20, 23]
 # target for testing.
 # target = [23]
 
-secret_goal_states = [2, 20, 34]
-reward_states = [14, 22]
-
+# secret_goal_states = [2, 20, 34]
+reward_states = target
+penalty_states = [4, 10, 11]
 obstacles = [17, 19]
 unsafe_u = [7, 15, 25]
-non_init_states = [1, 25, 9, 14, 15, 17, 19, 23]
+# non_init_states = [1, 25, 9, 14, 15, 17, 19, 23]
 initial = {0, 5, 30}
 initial_dist = dict([])
 # considering a single initial state.
@@ -30,7 +30,8 @@ for state in range(36):
     else:
         initial_dist[state] = 0
 
-robot_ts = read_from_file_MDP_old('robotmdp.txt')
+robot_ts_1 = read_from_file_MDP_old('robotmdp_1.txt')
+robot_ts_2 = read_from_file_MDP_old('robotmdp_2.txt')
 
 # sensor setup
 sensors = {'A', 'B', 'C', 'D', 'E', 'NO'}
@@ -59,34 +60,69 @@ sensor_net.set_coverage('NO', setNO)
 sensor_net.sensor_noise = sensor_noise
 # sensor_net.sensor_cost_dict = sensor_cost
 
-agent_gw_1 = GridworldGui(initial, nrows, ncols, robot_ts, target, obstacles, unsafe_u, initial_dist)
+agent_gw_1 = GridworldGui(initial, nrows, ncols, robot_ts_1, target, obstacles, unsafe_u, initial_dist)
 agent_gw_1.mdp.get_supp()
 agent_gw_1.mdp.gettrans()
 agent_gw_1.mdp.get_reward()
 agent_gw_1.draw_state_labels()
 
-print(agent_gw_1.mdp.trans)
+agent_gw_2 = GridworldGui(initial, nrows, ncols, robot_ts_2, target, obstacles, unsafe_u, initial_dist)
+agent_gw_2.mdp.get_supp()
+agent_gw_2.mdp.gettrans()
+agent_gw_2.mdp.get_reward()
+agent_gw_2.draw_state_labels()
 
-# reward/ value matrix for the agent.
-# value_dict = dict()
-# for state in agent_gw_1.mdp.states:
-#     if state in reward_states:
-#         value_dict[state] = 1
-#     else:
-#         value_dict[state] = 0
-#
+# reward/ value matrix for each agent.
+value_dict_1 = dict()
+for state in agent_gw_1.mdp.states:
+    if state == 5:
+        value_dict_1[state] = 2
+    elif state == 35:
+        value_dict_1[state] = 1
+    elif state in penalty_states:
+        value_dict_1[state] = -10
+    else:
+        value_dict_1[state] = 0
+
+value_dict_2 = dict()
+for state in agent_gw_1.mdp.states:
+    if state == 5:
+        value_dict_1[state] = 2
+    elif state == 35:
+        value_dict_1[state] = 1
+    elif state in penalty_states:
+        value_dict_1[state] = -3
+    else:
+        value_dict_1[state] = 0
+
+side_payment = {}
+for state in agent_gw_1.mdp.states:
+    s_idx = agent_gw_1.mdp.states.index(state)
+    side_payment[state] = {}
+    for action in agent_gw_1.mdp.actlist:
+        a_idx = agent_gw_1.mdp.actlist.index(action)
+        side_payment[s_idx][a_idx] = 0
+
+# E_idx = agent_gw_1.actlist.index('E')
+# N_idx = agent_gw_1.actlist.index('N')
+# s1_idx = agent_gw_1.states.index('')
+# idx1 = 4*len(agent_gw_1.actlist) + E_idx
+# idx2 = 11*len(agent_gw_1.actlist) + N_idx
+modify_list = [20]
+
+
 # # TODO: The augmented states still consider the gridcells with obstacles. Try by omitting the obstacle filled states
 # #  -> reduces computation.
 #
-# hmm_p2 = HiddenMarkovModelP2(agent_gw_1.mdp, sensor_net, value_dict=value_dict, secret_goal_states=secret_goal_states)
+hmm_1 = HiddenMarkovModelP2(agent_gw_1.mdp, sensor_net, side_payment, modify_list, value_dict=value_dict_1)
+hmm_2 = HiddenMarkovModelP2(agent_gw_2.mdp, sensor_net, side_payment, modify_list, value_dict=value_dict_1)
+hmm_list = [hmm_1, hmm_2]
 
 # masking_policy_gradient = PrimalDualPolicyGradient(hmm=hmm_p2, iter_num=1000, V=10, T=10, eta=1.5, kappa=0.1, epsilon=threshold)
 # masking_policy_gradient.solver()
 
-# masking_policy_gradient = InitialOpacityPolicyGradient(hmm=hmm_p2, ex_num=6, iter_num=5000, batch_size=100, V=2000,
-#                                                        T=12,
-#                                                        eta=0.5,
-#                                                        kappa=0.05,
-#                                                        epsilon=0.5)  # decreasing eta, kappa
-#
-# masking_policy_gradient.solver()
+masking_policy_gradient = InitialOpacityPolicyGradient(hmm_list=hmm_list, ex_num=6, iter_num=5000, batch_size=100, V=2000,
+                                                       T=12,
+                                                       eta=0.5)
+
+masking_policy_gradient.solver()
