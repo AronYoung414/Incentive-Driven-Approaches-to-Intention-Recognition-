@@ -125,7 +125,7 @@ policy_2 = hmm_list[1].policy
 # masking_policy_gradient = PrimalDualPolicyGradient(hmm=hmm_p2, iter_num=1000, V=10, T=10, eta=1.5, kappa=0.1, epsilon=threshold)
 # masking_policy_gradient.solver()
 
-masking_policy_gradient = InitialOpacityPolicyGradient(hmm_list=hmm_list, ex_num=1, iter_num=2000, batch_size=100, V=500,
+masking_policy_gradient = InitialOpacityPolicyGradient(hmm_list=hmm_list, ex_num=3, iter_num=2000, batch_size=100, V=2000,
                                                        T=12,
                                                        eta=0.1)
 

@@ -72,7 +72,7 @@ class InitialOpacityPolicyGradient:
         self.get_all_lists()
 
         self.entropy_list = list([])
-        self.threshold_list = list([])
+        # self.threshold_list = list([])
         self.iteration_list = list([])
         self.theta_torch_collection = list([])
         self.x_list = list([])
@@ -593,8 +593,8 @@ class InitialOpacityPolicyGradient:
         with open(f'../Data/entropy_values_{self.ex_num}.pkl', 'wb') as file:
             pickle.dump(self.entropy_list, file)
 
-        with open(f'../Data/value_function_list_{self.ex_num}', 'wb') as file:
-            pickle.dump(self.threshold_list, file)
+        # with open(f'../Data/value_function_list_{self.ex_num}', 'wb') as file:
+        #     pickle.dump(self.threshold_list, file)
 
         with open(f'../Data/x_list_{self.ex_num}', 'wb') as file:
             pickle.dump(self.x_list, file)
@@ -605,7 +605,7 @@ class InitialOpacityPolicyGradient:
         figure, axis = plt.subplots(2, 1)
 
         axis[0].plot(self.iteration_list, self.entropy_list, label='Entropy')
-        axis[1].plot(self.iteration_list, self.threshold_list, label='Estimated Cost')
+        # axis[1].plot(self.iteration_list, self.threshold_list, label='Estimated Cost')
         plt.xlabel("Iteration number")
         plt.ylabel("Values")
         plt.legend()
