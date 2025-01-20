@@ -54,7 +54,7 @@ class InitialOpacityPolicyGradient:
             torch.zeros(self.x_size, dtype=torch.float32, device=device,
                         requires_grad=False))
         self.x.data[self.modify_list] = 1
-        self.weight = 0.1
+        self.weight = 0.05
 
         # Defining optimal theta in pyTorch ways.
         self.theta_torch_list = []
@@ -72,7 +72,7 @@ class InitialOpacityPolicyGradient:
         self.get_all_lists()
 
         self.entropy_list = list([])
-        # self.threshold_list = list([])
+        self.total_cost_list = list([])
         self.iteration_list = list([])
         self.theta_torch_collection = list([])
         self.x_list = list([])
@@ -378,7 +378,7 @@ class InitialOpacityPolicyGradient:
         # test_nabla_H = self.theta_torch.grad.clone()
         nabla_H = nabla_H / self.batch_size
 
-        return -H, -nabla_H
+        return -H, nabla_H
 
     def dtheta_T_dx(self, type_num):
         # returns a NM X NM matrix, (i, j) is dtheta_i/dx_j
@@ -465,7 +465,7 @@ class InitialOpacityPolicyGradient:
         product = product + self.dh_dx()
         # nonzero_indices = product.nonzero(as_tuple=False)
         # print("Nonzero elements:", product[nonzero_indices].tolist())
-        return H, - product
+        return H, product
 
     def get_side_payment(self, x):
         side_payment = {}
@@ -551,16 +551,20 @@ class InitialOpacityPolicyGradient:
 
                 # Computing gradient of Lagrangian with grad_H and grad_V.
                 # grad_L = grad_H + self.lambda_mul * grad_V
-            print("The approximate entropy is", approximate_cond_entropy / trajectory_iter)
-            self.entropy_list.append(approximate_cond_entropy / trajectory_iter)
+            entropy = approximate_cond_entropy / trajectory_iter
+            print("The approximate entropy is", entropy)
+            self.entropy_list.append(entropy)
+            total_cost = (approximate_cond_entropy / trajectory_iter + self.weight * torch.sum(self.x)).item()
+            print("The objective function is", total_cost)
+            self.total_cost_list.append(total_cost)
 
-            print(f"Memory allocated: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
-            print(f"Memory cached: {torch.cuda.memory_reserved() / 1e9:.2f} GB")
+            # print(f"Memory allocated: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+            # print(f"Memory cached: {torch.cuda.memory_reserved() / 1e9:.2f} GB")
 
             # grad_L = (grad_H / trajectory_iter)
             # Use the above line for only the entropy term.
             grad = (grad / trajectory_iter)
-            print("The gradient of entropy", grad / trajectory_iter)
+            print("The gradient of entropy", (grad / trajectory_iter)[0][self.modify_list].item())
             # print("The gradient of value", grad_V_comparison_total / trajectory_iter)
 
             # print("The approximate value is", approximate_value_total / trajectory_iter)
@@ -571,7 +575,7 @@ class InitialOpacityPolicyGradient:
             with torch.no_grad():
                 self.x = self.x - self.eta * grad
                 self.x = torch.clamp(self.x, min=0)
-                print("The side payment is", self.x)
+                print("The side payment is", self.x[0][self.modify_list[0]].item())
 
             # self.lambda_mul = (self.lambda_mul - self.kappa *
             #                    ((approximate_value_total / trajectory_iter) - self.epsilon))

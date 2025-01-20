@@ -17,8 +17,8 @@ target = [5, 35]
 
 # secret_goal_states = [2, 20, 34]
 reward_states = target
-penalty_states = []
-obstacles = [13, 17, 21, 29, 33]
+penalty_states = [4, 10, 11]
+obstacles = [17, 19]
 unsafe_u = []
 # non_init_states = [1, 25, 9, 14, 15, 17, 19, 23]
 initial = {0}
@@ -31,7 +31,7 @@ for state in range(36):
         initial_dist[state] = 0
 
 robot_ts_1 = read_from_file_MDP_old('robotmdp_1.txt')
-robot_ts_2 = read_from_file_MDP_old('robotmdp_2.txt')
+robot_ts_2 = read_from_file_MDP_old('robotmdp_3.txt')
 
 # sensor setup
 sensors = {'A', 'B', 'C', 'D', 'NO'}
@@ -83,7 +83,7 @@ for state in agent_gw_1.mdp.states:
     elif state in penalty_states:
         value_dict_1[state] = -0.1
     else:
-        value_dict_1[state] = -0.01
+        value_dict_1[state] = 0
 
 value_dict_2 = dict()
 for state in agent_gw_2.mdp.states:
@@ -94,7 +94,7 @@ for state in agent_gw_2.mdp.states:
     elif state in penalty_states:
         value_dict_2[state] = -20
     else:
-        value_dict_2[state] = -0.01
+        value_dict_2[state] = 0
 
 side_payment = {}
 for state in agent_gw_1.mdp.states:
@@ -109,7 +109,7 @@ for state in agent_gw_1.mdp.states:
 # s1_idx = agent_gw_1.states.index('')
 # idx1 = 4*len(agent_gw_1.actlist) + E_idx
 # idx2 = 11*len(agent_gw_1.actlist) + N_idx
-modify_list = [140]
+modify_list = [20]
 
 
 # # TODO: The augmented states still consider the gridcells with obstacles. Try by omitting the obstacle filled states
@@ -125,8 +125,8 @@ policy_2 = hmm_list[1].policy
 # masking_policy_gradient = PrimalDualPolicyGradient(hmm=hmm_p2, iter_num=1000, V=10, T=10, eta=1.5, kappa=0.1, epsilon=threshold)
 # masking_policy_gradient.solver()
 
-masking_policy_gradient = InitialOpacityPolicyGradient(hmm_list=hmm_list, ex_num=4, iter_num=2000, batch_size=100, V=500,
+masking_policy_gradient = InitialOpacityPolicyGradient(hmm_list=hmm_list, ex_num=5, iter_num=1000, batch_size=100, V=2000,
                                                        T=12,
-                                                       eta=0.5)
+                                                       eta=0.1)
 
 masking_policy_gradient.solver()
