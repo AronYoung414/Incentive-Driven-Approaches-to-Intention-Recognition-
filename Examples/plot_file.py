@@ -1,8 +1,9 @@
 import matplotlib.pyplot as plt
 import pickle
 
-ex_num = 2
-iter_num = 2000
+ex_num = 5
+iter_num = 1000
+modify_num = 20
 
 iteration_list = range(iter_num)
 
@@ -17,7 +18,7 @@ with open(f'../Data/x_list_{ex_num}', 'rb') as file:
 
 side_payment_list = []
 for i in iteration_list:
-    side_payment_list.append(x_list[i][20].item())
+    side_payment_list.append(x_list[i][modify_num].item())
 
 print(side_payment_list)
 

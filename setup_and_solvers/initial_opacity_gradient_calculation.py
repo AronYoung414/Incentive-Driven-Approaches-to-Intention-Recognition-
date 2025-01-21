@@ -11,6 +11,7 @@ import torch.nn.functional as F
 import itertools
 # import gc
 import pickle
+import math
 
 # from loguru import logger
 
@@ -520,6 +521,8 @@ class InitialOpacityPolicyGradient:
             self.theta_torch_collection.append(self.theta_torch_list)
             self.x_list.append(self.x)
 
+            self.eta = 0.5 * math.exp(-0.0001 * i)
+
             for j in range(trajectory_iter):
                 torch.cuda.empty_cache()
 
@@ -606,9 +609,7 @@ class InitialOpacityPolicyGradient:
         with open(f'../Data/theta_collection_{self.ex_num}', 'wb') as file:
             pickle.dump(self.theta_torch_collection, file)
 
-        figure, axis = plt.subplots(2, 1)
-
-        axis[0].plot(self.iteration_list, self.entropy_list, label='Entropy')
+        plt.plot(self.iteration_list, self.entropy_list, label='Entropy')
         # axis[1].plot(self.iteration_list, self.threshold_list, label='Estimated Cost')
         plt.xlabel("Iteration number")
         plt.ylabel("Values")
