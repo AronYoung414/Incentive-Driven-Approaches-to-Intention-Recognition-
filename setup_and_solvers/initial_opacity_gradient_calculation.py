@@ -24,13 +24,13 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class InitialOpacityPolicyGradient:
-    def __init__(self, hmm_list, ex_num, iter_num=1000, batch_size=1, V=100, T=10, eta=1):
+    def __init__(self, hmm_list, ex_num, true_type_num=1, iter_num=1000, batch_size=1, V=100, T=10, eta=1):
         for hmm in hmm_list:
             if not isinstance(hmm, HiddenMarkovModelP2):
                 raise TypeError("Expected hmm to be an instance of HiddenMarkovModelP2.")
 
         self.num_of_types = len(hmm_list)
-        self.true_type_num = 1
+        self.true_type_num = true_type_num
         self.modify_list = hmm_list[0].modify_list
         self.prior = np.ones(self.num_of_types) / self.num_of_types
         self.prior = torch.from_numpy(self.prior).type(dtype=torch.float32)
@@ -331,6 +331,32 @@ class InitialOpacityPolicyGradient:
         return P_T_y, gradient_P_T_y, prob_P_y, gradient_P_y
         # return resultant_matrix_prob_y_one_less, resultant_matrix, gradient_P_y_one_less
 
+    def approximate_posterior(self, y_obs_data):
+        P_T_y_list = []
+        for t in range(self.num_of_types):
+            P_T_y_list.append(0)
+        for t in range(self.num_of_types):
+            for v in range(self.batch_size):
+                y_v = y_obs_data[v]
+
+                A_matrices_list = []
+                for type_num in range(self.num_of_types):
+                    # construct the A matrices.
+                    A_matrices_list.append(
+                        self.compute_A_matrices(type_num, y_v))  # Compute for each y_v.
+
+                # values for the term w_T = 1.
+                P_T_y, gradient_P_T_y, result_P_y, gradient_P_y = self.P_T_g_Y(t, A_matrices_list)
+
+                # to prevent numerical issues, clamp the values of p_theta_w_t_g_yv_1 between 0 and 1.
+                P_T_y = torch.clamp(P_T_y, min=0.0, max=1.0)
+
+                P_T_y_list[t] = P_T_y_list[t] + P_T_y.item()
+
+            P_T_y_list[t] = P_T_y_list[t] / self.batch_size
+        # print("Done")
+        return P_T_y_list
+
     def approximate_conditional_entropy_and_gradient_S0_given_Y(self, y_obs_data):
         # Computes the conditional entropy H(S_0 | Y; \theta); AND the gradient of conditional entropy \nabla_theta
         # H(S_0|Y; \theta).
@@ -498,6 +524,7 @@ class InitialOpacityPolicyGradient:
             # Update the optimal value function and the optimal policy
             self.hmm_list[type_num].optimal_V, self.hmm_list[type_num].policy = self.hmm_list[
                 type_num].get_policy_entropy(tau=0.1)
+            # print(self.hmm_list[type_num].optimal_V)
             # Update the
             self.hmm_list[type_num].optimal_theta = self.hmm_list[type_num].get_optimal_theta(
                 self.hmm_list[type_num].optimal_V)
@@ -521,7 +548,7 @@ class InitialOpacityPolicyGradient:
             self.theta_torch_collection.append(self.theta_torch_list)
             self.x_list.append(self.x)
 
-            self.eta = 0.5 * math.exp(-0.0001 * i)
+            self.eta = 0.5 * math.exp(-0.005 * i)
 
             for j in range(trajectory_iter):
                 torch.cuda.empty_cache()

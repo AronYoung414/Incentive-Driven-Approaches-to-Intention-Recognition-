@@ -1,9 +1,9 @@
 import matplotlib.pyplot as plt
 import pickle
 
-ex_num = 5
+ex_num = 7
 iter_num = 1000
-modify_num = 20
+modify_num = 140
 
 iteration_list = range(iter_num)
 
