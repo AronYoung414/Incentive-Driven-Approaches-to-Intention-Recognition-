@@ -627,9 +627,6 @@ class InitialOpacityPolicyGradient:
         with open(f'../Data/entropy_values_{self.ex_num}.pkl', 'wb') as file:
             pickle.dump(self.entropy_list, file)
 
-        # with open(f'../Data/value_function_list_{self.ex_num}', 'wb') as file:
-        #     pickle.dump(self.threshold_list, file)
-
         with open(f'../Data/x_list_{self.ex_num}', 'wb') as file:
             pickle.dump(self.x_list, file)
 

@@ -3,9 +3,9 @@ import pickle
 
 plt.rcParams.update({'font.size': 14})
 
-ex_num = 5
-iter_num = 1000
-modify_num = 20
+ex_num = 8
+iter_num = 2000
+modify_num = 140
 weight = 0.05
 
 iteration_list = range(iter_num)
@@ -29,7 +29,6 @@ for i in iteration_list:
 
 # print(side_payment_list)
 
-print("The last objective function is", total_cost_list[-1])
 print("The initial entropy value is", entropy_list[0])
 print("The last entropy value is", entropy_list[-1])
 print("The side payment value is", side_payment_list[-1])
@@ -56,6 +55,12 @@ axis[2].set_xlabel("Iteration number")  # Set xlabel for the second subplot
 axis[2].set_ylabel("Side-Payment Values")  # Set ylabel for the second subplot
 axis[2].legend()  # Add legend to the second subplot
 axis[2].grid(True)
+# Plot data on the second subplot with a dashed blue line
+# axis[1].plot(iteration_list, threshold_list, color='blue', linestyle='-', label='Estimated Total Return')
+# axis[1].set_xlabel("Iteration number")  # Set xlabel for the second subplot
+# axis[1].set_ylabel("Estimated Policy Values")  # Set ylabel for the second subplot
+# axis[1].legend()  # Add legend to the second subplot
+# axis[1].grid(True)
 
 # Save and display the plot
 plt.tight_layout()
